@@ -27,6 +27,20 @@ HIGH_COMPLEXITY = {
 }
 MEDIUM_COMPLEXITY = {"implement", "build", "feature", "test", "integration", "api"}
 
+# Task-risk vocabulary (Phase 8: risk-aware routing). Risky tasks justify
+# stronger reasoning regardless of raw length/keyword complexity.
+HIGH_RISK_TASK = {
+    "production", "deploy", "deployment", "migration", "irreversible",
+    "security", "credentials", "secret", "payment", "billing", "delete",
+    "destructive", "database", "schema change", "rollback",
+}
+
+# Agent risk tolerance shifts the complexity bar: minimal-tolerance agents
+# (devops, security, QA) get stronger models sooner because their domains
+# are exactly the ones where mistakes are expensive. High-tolerance agents
+# (executive, growth experiments) tolerate cheaper models on ambiguity.
+TOLERANCE_COMPLEXITY_ADJUST = {"minimal": -1, "low": 0, "moderate": 0, "high": 1}
+
 TIER_ORDER = ["t0", "t1", "t2", "t3"]
 
 
@@ -96,6 +110,11 @@ class ModelRouter:
                     force_model: Optional[str] = None) -> tuple[Optional[str], str]:
         """Return (model_id, reason). model_id None means 'no model (rejected)'."""
         if force_model:
+            # forced models must still exist and be enabled: a caller may pin
+            # a model, but may not invent one (no phantom-model execution).
+            forced = await self.registry.get(force_model)
+            if forced is None or not forced.enabled:
+                return None, f"forced model unknown or disabled: {force_model}"
             return force_model, "forced by caller"
         policy = agent.model_policy or {}
         base_tier = policy.get("tier", "t2")
@@ -106,6 +125,23 @@ class ModelRouter:
         if score >= 6 and tier in ("t1", "t2"):
             tier = "t2" if tier == "t1" else "t3"
         tier = min(tier, max_tier) if max_tier in ("t1", "t2", "t3") else tier
+
+        # risk-aware routing (Phase 8): the task's own risk vocabulary and
+        # the agent's risk tolerance are selection factors, not just prose.
+        # A risky task handled by a minimal-risk-tolerance agent earns a
+        # stronger model sooner; the same task with a high-tolerance agent
+        # does not automatically escalate. Explainable, bounded by max_tier.
+        risk_note = ""
+        task_risk = len(HIGH_RISK_TASK & set(re.findall(r"[a-z]+", text.lower())))
+        if task_risk and agent.identity is not None:
+            tolerance = agent.identity.risk_tolerance
+            adjust = TOLERANCE_COMPLEXITY_ADJUST.get(tolerance, 0)
+            if (task_risk >= 1 and adjust < 0) or (task_risk >= 2 and adjust > 0):
+                effective = score + task_risk + adjust
+                if effective >= 5 and tier in ("t1", "t2") and tier < max_tier:
+                    tier = "t2" if tier == "t1" else "t3"
+                    risk_note = (f" | risk-aware: {task_risk} risk signals, "
+                                 f"tolerance {tolerance} → tier {tier}")
 
         # performance influence: track record shifts routing (operational, not
         # cosmetic) — weak performers go to stronger models, proven ones can
@@ -147,7 +183,7 @@ class ModelRouter:
         if decision.action == "downgrade" and decision.suggested_model:
             return decision.suggested_model, decision.reason + " → " + decision.suggested_model
         reason = (f"tier {tier} (complexity {score}) via {agent.id} policy, "
-                  f"est ${est_cost:.4f} — {decision.reason}{perf_note}")
+                  f"est ${est_cost:.4f} — {decision.reason}{perf_note}{risk_note}")
         return model_id, reason
 
     async def failover(self, primary: str, error: str) -> tuple[Optional[str], str]:

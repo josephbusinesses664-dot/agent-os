@@ -86,7 +86,10 @@ def build_org() -> list[AgentDef]:
             ["strategy", "opportunity-scoring", "executive-briefing"],
             ["mattermost.post", "memory.recall", "memory.save", "project.state", "api.call"],
             "t3", "medium",
-            {"api.call": "allow", "filesystem.write": "allow", "shell": "allow"},
+            {"api.call": "allow", "filesystem.write": "allow", "shell": "allow",
+             # the executive may reach across the org for purposeful
+             # delegation; directors delegate down their own chains
+             "agent.delegate": "allow"},
         ),
         _agent(
             "chief-of-staff", "Chief of Staff", "Coordination",

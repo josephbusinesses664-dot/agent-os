@@ -542,23 +542,51 @@ async def _h_docker(ctx: Any, args: dict) -> dict:
 
 async def _h_agent_delegate(ctx: Any, args: dict) -> dict:
     """Delegate a subtask to a child agent. Bounded by engine spawn limits
-    (depth, parallelism, budget, duplicate detection)."""
+    (depth, parallelism, budget, duplicate detection).
+
+    Two modes:
+    - explicit: `agent` names the child (hierarchy/permission gated)
+    - purposeful: `agent: "auto"` asks the DelegationEngine to select the
+      best suited AND authorized candidate (explainable scoring)
+    """
     child = args.get("agent", "")
     description = args.get("description", "")
     if not child or not description:
         return {"ok": False, "error": "agent and description are required"}
     if ctx.task is None:
         return {"ok": False, "error": "delegation requires a parent task"}
-    # only the child's parent (or an explicitly permitted agent) may delegate.
-    # The permission must be EXPLICIT — the default-allow policy does not
-    # apply to delegation.
-    child_def = await ctx.agent_registry.get(child)
-    if child_def is None:
-        return {"ok": False, "error": f"unknown agent {child}"}
-    permitted = (child_def.parent_agent == ctx.agent.id
-                 or ctx.agent.permissions.get("agent.delegate", "deny") == "allow")
-    if not permitted:
-        return {"ok": False, "error": f"{ctx.agent.id} may not delegate to {child}"}
+    if ctx.agent is None:
+        return {"ok": False, "error": "delegation requires an agent context"}
+
+    selection_note = ""
+    if child == "auto":
+        # purposeful selection: bounded by hierarchy + permissions; the
+        # engine only widens the pool when the caller holds agent.delegate
+        if ctx.agent.permissions.get("agent.delegate", "deny") != "allow" \
+                and not ctx.agent.allowed_children:
+            return {"ok": False, "error": f"{ctx.agent.id} may not delegate"}
+        from agentos.orchestration.delegation import DelegationEngine
+        engine = DelegationEngine(ctx.agent_registry,
+                                  performance=getattr(ctx.services, "performance", None),
+                                  instances=ctx.agent_registry)
+        decision = await engine.select(ctx.agent.id, description)
+        if not decision.selected:
+            return {"ok": False, "error": decision.reason,
+                    "candidates": [c.agent_id for c in decision.candidates]}
+        child = decision.selected
+        selection_note = decision.explanation()
+    else:
+        # only the child's parent (or an explicitly permitted agent) may
+        # delegate. The permission must be EXPLICIT — the default-allow
+        # policy does not apply to delegation.
+        child_def = await ctx.agent_registry.get(child)
+        if child_def is None:
+            return {"ok": False, "error": f"unknown agent {child}"}
+        permitted = (child_def.parent_agent == ctx.agent.id
+                     or ctx.agent.permissions.get("agent.delegate", "deny") == "allow")
+        if not permitted:
+            return {"ok": False, "error": f"{ctx.agent.id} may not delegate to {child}"}
+
     try:
         child_result = await ctx.services.engine.spawn_subagent(
             ctx.task, child, description, depth=ctx.spawn_depth + 1)
@@ -566,7 +594,8 @@ async def _h_agent_delegate(ctx: Any, args: dict) -> dict:
         return {"ok": False, "error": f"delegation failed: {exc}"}
     return {"ok": True, "child": child, "result": child_result.content[:4000],
             "error": child_result.error, "artifacts": child_result.artifacts,
-            "cost": child_result.cost}
+            "cost": child_result.cost,
+            **({"selection": selection_note} if selection_note else {})}
 
 
 async def _h_agent_challenge(ctx: Any, args: dict) -> dict:
@@ -671,7 +700,7 @@ BUILTIN_TOOLS: list[ToolDef] = [
             permission_key="tool.discover", risk_level="low", category="system"),
     ToolDef(name="tool.health", description="Check a tool's health/availability.",
             permission_key="tool.health", risk_level="low", category="system"),
-    ToolDef(name="agent.delegate", description="Delegate a bounded subtask to a child agent (depth/parallel/budget limited).",
+    ToolDef(name="agent.delegate", description="Delegate a bounded subtask to a child agent (depth/parallel/budget limited). Use agent='auto' for purposeful selection among authorized, best-suited agents.",
             permission_key="agent.delegate", risk_level="medium", category="system"),
     ToolDef(name="agent.challenge", description="Raise a structured disagreement with another agent: claim + evidence + severity + recommended action.",
             permission_key="mattermost.post", risk_level="low", category="system"),
