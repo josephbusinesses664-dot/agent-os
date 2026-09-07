@@ -41,3 +41,14 @@
 - Logs: `docker logs -f agent-os-app-1`
 - CLI: `docker exec agent-os-app-1 agent-os <cmd>`
 - Old box patches preserved: git stash + box-fixes-backup.patch (first session)
+
+## Home Terminal (Prem's direct line to Claude Code) — 2026-09-07
+- Mattermost channel `home-terminal` (team ai-agency), bot account `claude-code`
+- Bridge: `~/home-terminal-bridge/bridge.py` (nohup + @reboot cron) polls the
+  channel, keeps full history in `history.md`, answers via headless
+  `claude -p --model deepseek-v4-pro[1m]` with the full history in context
+- Bot PAT: `~/home-terminal-token.txt` (600)
+- Logs: `~/home-terminal-bridge/bridge.log`
+- MCP servers registered for the agency: context7 (docs), github (guarded)
+- Deploy keys: GITHUB_TOKEN (OpenClaw's), RENDER_API_KEY + RENDER_OWNER in .env;
+  deploy.github/render.manage guarded against Bellam & Kaaram / QueSnack
