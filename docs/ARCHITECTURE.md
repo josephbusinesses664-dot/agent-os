@@ -105,11 +105,17 @@ scanner + redaction validator).
 ### Memory
 One store, five layers (task/project/agent/org/user). Recall is TF-IDF
 semantic ranking blended with importance and recency — deterministic and
-offline. Facts are versioned (a restated fact supersedes the old one with a
-`supersedes` link, never a silent overwrite); completed tasks become
-retrievable episodes; consolidation archives stale low-access entries and
-merges duplicates. Every entry carries provenance
-(`agent:<id> task:<id>`).
+offline. Facts are versioned and **contradiction-aware**: restating a fact
+supersedes the old entry (`supersedes` link); a newer statement that negates
+the old one archives it and records a `contradicts` relationship — history
+is never silently overwritten (Graphiti-style). Facts can carry temporal
+validity windows (`valid_from`/`valid_to`); expired facts are archived lazily
+and never recalled. A typed **knowledge-graph layer** (`MemoryLink`:
+related/part_of/contradicts/supersedes/applies_to/caused_by/used_by) links
+entries; `memory.graph()` returns nodes+edges for an owner, and
+`memory.neighbors()` walks relationships. Completed tasks become retrievable
+episodes; consolidation archives stale low-access entries and merges
+duplicates. Every entry carries provenance (`agent:<id> task:<id>`).
 
 ### Evaluation & performance
 Every stage/task outcome is scored by the deterministic evaluator (evidence
@@ -118,7 +124,12 @@ checklist) and optionally an LLM judge; records persist and feed the
 and delegation picks children by track record (`engine.pick_child`).
 `eval_sets/*.jsonl` are regression datasets; `agent-os evaluate basic` runs a
 benchmark through the real engine path and produces cost-aware leaderboards
-(`agent-os leaderboard`).
+(`agent-os leaderboard`). **Failure analysis** (`agentos/evaluation/failure_analysis.py`)
+closes the self-improvement loop: persisted records become failure
+categories + recommendations, and `best_match(records, goal)` answers "who
+does this kind of task best?" (pass rate, score, cost, latency), used by
+`agent-os analyze [goal]`. Downstream-success tracking folds delegation
+outcomes into the delegating agent's stats (`record_downstream`).
 
 ### Tracing
 Every meaningful action records a span (kind: agent/stage/model/tool/
@@ -128,6 +139,28 @@ agent → stage → model → tool → result. `/api/traces/<task_id>` and
 `agent-os traces <task_id>` expose it; `trace.span` events stream to
 subscribers.
 
+### Dynamic planning
+Simple goals should not run every stage. `DynamicPlanner`
+(`agentos/planning.py`) selects stages from `workflows/stage_templates.yaml`
+by keyword scoring (or honors an explicit `PLANNED_STAGES: [...]` marker in
+the goal, or expands to the full pipeline with `expand_full`), and assembles
+a `WorkflowDef` the engine runs exactly like a hand-written one — same
+approval gates, same artifacts convention. `agent-os plan "goal"` shows the
+plan; `--execute` runs it; the full 0→100 workflow remains available by
+name.
+
+### Browser + adapters
+`BrowserSession` (`agentos/integrations/browser.py`, Playwright-powered)
+gives agents real web navigation — open/snapshot/click/type/evaluate/
+screenshot — created lazily per agent run and closed when the run ends (no
+browser outlives its task). All browser tools flow through the executor
+(permissions, timeouts, audit); `browser.evaluate` is high-risk and
+approval-gated. Read-only adapters (GitHub search, Postgres SELECT, Docker
+ps/inspect/logs) are technically enforced: the read-only gate runs before
+any config/connection, so a write attempt is blocked even with valid
+credentials. Adapter and browser tools default to **deny** for all agents;
+the org chart grants them per role.
+
 ## Storage
 
 - **Repository** — document store (`collection, key → JSON`). In-memory
@@ -136,8 +169,9 @@ subscribers.
 - **KV + Queue** — Redis when configured; in-memory fallback otherwise. Used
   for the task queue, counters and caching.
 - **Memory** — durable entries at agent/project/org/user/task scope with
-  TF-IDF semantic recall; vector search can be layered behind the same
-  interface only where it demonstrably helps.
+  TF-IDF semantic recall; typed `memory_links` for the knowledge graph;
+  vector search can be layered behind the same interface only where it
+  demonstrably helps.
 - **Traces** — span store for telemetry (tokens, cost, latency, errors).
 - **Evaluation** — evaluation records + benchmark run summaries.
 - **Performance** — per-agent rolling statistics (all/weekly/daily).

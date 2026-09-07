@@ -68,19 +68,48 @@ class OrchestratorEngine:
         return {"project_id": project.project_id, "run_id": run["run_id"],
                 "status": run["status"]}
 
+    async def execute_dynamic(self, goal: str, user_id: str = "human",
+                              stages: Optional[list[str]] = None,
+                              expand_full: bool = False) -> dict:
+        """Autonomous planning: the planner selects the required stages from
+        the goal (explicit PLANNED_STAGES marker, keyword scoring, or the full
+        pipeline on request), then runs them through the same engine."""
+        plan = self.svc.planner.plan_summary(goal) if stages is None else {
+            "stages": stages, "count": len(stages)}
+        workflow = self.svc.planner.build_workflow(goal, stages=stages) \
+            if stages is not None else self.svc.planner.build_workflow(goal)
+        if expand_full and stages is None:
+            workflow = self.svc.planner.build_workflow(
+                goal, stages=self.svc.planner.plan_stages(goal, expand_full=True))
+        name = _slug(goal)[:60] or "New Project"
+        project = await self.svc.projects.create(
+            name, objective=goal, created_by=user_id, workflow_id=workflow.workflow_id)
+        await self.svc.events.publish(
+            "workflow.planned",
+            {"goal": goal[:200], "stages": plan["stages"],
+             "agents": plan.get("agents", []), "workflow": workflow.workflow_id},
+            project_id=project.project_id, source="executive")
+        run = await self.run_workflow_obj(workflow, project.project_id)
+        return {"project_id": project.project_id, "run_id": run["run_id"],
+                "status": run["status"], "planned_stages": plan["stages"]}
+
     async def run_workflow(self, workflow_id: str, project_id: str,
                            entry_stage: Optional[str] = None) -> dict:
         workflow = await self.svc.workflow_registry.get(workflow_id)
         if workflow is None:
             raise KeyError(f"workflow {workflow_id} not found")
+        return await self.run_workflow_obj(workflow, project_id, entry_stage)
+
+    async def run_workflow_obj(self, workflow: WorkflowDef, project_id: str,
+                               entry_stage: Optional[str] = None) -> dict:
         project = await self.svc.projects.require(project_id)
         run_id = new_id("run")
-        state = new_state(run_id, workflow_id, project_id,
+        state = new_state(run_id, workflow.workflow_id, project_id,
                           entry_stage or workflow.entry_stage,
                           [s.model_dump() for s in workflow.stages])
         self._active_runs[run_id] = {"workflow": workflow, "state": state}
         await self.svc.events.publish("workflow.started",
-                                      {"workflow_id": workflow_id, "run_id": run_id},
+                                      {"workflow_id": workflow.workflow_id, "run_id": run_id},
                                       project_id=project_id, source="orchestrator")
         final = await self._invoke(run_id, state)
         return final
@@ -294,6 +323,14 @@ class OrchestratorEngine:
                      "retried_with": forced},
                     project_id=parent_task.project_id, task_id=child.task_id,
                     priority="high", requires_response=True)
+            # downstream-success tracking: delegation outcomes fold back into
+            # the parent agent's performance record (self-improvement signal)
+            try:
+                if parent_task.assigned_agent:
+                    await self.svc.performance.record_downstream(
+                        parent_task.assigned_agent, result.error is None)
+            except Exception:  # noqa: BLE001
+                pass
             return result
         finally:
             self._parallel_count -= 1

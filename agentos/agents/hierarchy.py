@@ -43,6 +43,16 @@ def _agent(
         "mcp.call": "deny",
         "deploy": "deny",
         "github": "deny",
+        "postgres.query": "deny",
+        "docker": "deny",
+        "agent.delegate": "deny",
+        "browser.open": "deny",
+        "browser.snapshot": "deny",
+        "browser.click": "deny",
+        "browser.type": "deny",
+        "browser.screenshot": "deny",
+        "browser.evaluate": "deny",
+        "browser.close": "deny",
     }
     perms.update(extra_permissions or {})
     return AgentDef(
@@ -147,7 +157,10 @@ def build_org() -> list[AgentDef]:
             ["frontend-engineering", "react-nextjs", "design-quality", "ui-qa"],
             ["filesystem.read", "filesystem.write", "shell", "memory.recall"],
             "t2",
-            extra_permissions={"filesystem.write": "allow", "shell": "allow"},
+            extra_permissions={"filesystem.write": "allow", "shell": "allow",
+                              "browser.open": "allow", "browser.snapshot": "allow",
+                              "browser.click": "allow", "browser.type": "allow",
+                              "browser.screenshot": "allow", "browser.close": "allow"},
         ),
         _agent(
             "backend-lead", "Backend Lead", "Backend engineering",
@@ -160,11 +173,13 @@ def build_org() -> list[AgentDef]:
         ),
         _agent(
             "database-engineer", "Database Engineer", "Data layer",
-            "Designs schemas, migrations and query optimization.",
+            "Designs schemas, migrations and query optimization. Read-only query "
+            "adapter is approval-gated.",
             "cto", [],
             ["database-design", "data-modeling"],
             ["filesystem.read", "memory.recall"],
             "t1",
+            extra_permissions={"postgres.query": "allow"},
         ),
         _agent(
             "devops-engineer", "DevOps Engineer", "Deployment & infra",
@@ -173,7 +188,8 @@ def build_org() -> list[AgentDef]:
             ["deployment", "docker", "monitoring"],
             ["filesystem.read", "shell", "deploy", "github", "memory.recall"],
             "t2", "high",
-            extra_permissions={"shell": "allow", "deploy": "allow", "github": "allow"},
+            extra_permissions={"shell": "allow", "deploy": "allow", "github": "allow",
+                              "docker": "allow"},
         ),
         _agent(
             "ai-engineer", "AI Engineer", "AI/ML engineering",
@@ -209,6 +225,8 @@ def build_org() -> list[AgentDef]:
             ["ui-design", "design-systems", "visual-hierarchy"],
             ["filesystem.read", "memory.recall"],
             "t2",
+            extra_permissions={"browser.open": "allow", "browser.snapshot": "allow",
+                              "browser.close": "allow"},
         ),
         _agent(
             "motion-engineer", "Motion / Creative Engineer", "Motion & creative engineering",
@@ -247,7 +265,9 @@ def build_org() -> list[AgentDef]:
             ["community-intelligence", "reddit-research", "sentiment-analysis"],
             ["web.search", "web.scrape", "api.call", "memory.recall"],
             "t2",
-            extra_permissions={"web.scrape": "allow", "api.call": "allow"},
+            extra_permissions={"web.scrape": "allow", "api.call": "allow",
+                              "browser.open": "allow", "browser.snapshot": "allow",
+                              "browser.close": "allow"},
         ),
         _agent(
             "competitor-analyst", "Competitor Analyst", "Competitive analysis",
@@ -264,7 +284,9 @@ def build_org() -> list[AgentDef]:
             ["technical-research", "api-evaluation"],
             ["web.search", "web.scrape", "memory.recall"],
             "t1",
-            extra_permissions={"web.scrape": "allow"},
+            extra_permissions={"web.scrape": "allow",
+                              "browser.open": "allow", "browser.snapshot": "allow",
+                              "browser.close": "allow"},
         ),
         # --- Marketing -----------------------------------------------------
         _agent(
@@ -355,12 +377,15 @@ def build_org() -> list[AgentDef]:
         ),
         _agent(
             "test-engineer", "Test Engineer", "Testing",
-            "Writes and RUNS unit/integration/e2e tests. Evidence, not claims.",
+            "Writes and RUNS unit/integration/e2e/browser tests. Evidence, not claims.",
             "qa-director", [],
-            ["testing", "test-automation", "e2e-testing"],
+            ["testing", "test-automation", "e2e-testing", "ui-qa"],
             ["filesystem.read", "filesystem.write", "shell", "memory.recall"],
             "t1",
-            extra_permissions={"filesystem.write": "allow", "shell": "allow"},
+            extra_permissions={"filesystem.write": "allow", "shell": "allow",
+                              "browser.open": "allow", "browser.snapshot": "allow",
+                              "browser.click": "allow", "browser.type": "allow",
+                              "browser.screenshot": "allow", "browser.close": "allow"},
         ),
         _agent(
             "code-reviewer", "Code Reviewer", "Code review",
@@ -432,7 +457,7 @@ def build_org() -> list[AgentDef]:
             ["monitoring", "incident-response"],
             ["shell", "memory.recall", "mattermost.post"],
             "t1", "medium",
-            extra_permissions={"shell": "allow"},
+            extra_permissions={"shell": "allow", "docker": "allow"},
         ),
     ]
 

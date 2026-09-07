@@ -228,7 +228,18 @@ class McpServer(BaseModel):
     permissions: dict[str, str] = Field(default_factory=dict)
     risk_level: str = "medium"
     required_credentials: list[str] = Field(default_factory=list)
+    # auth config: {"type": "bearer" | "header" | "basic", ...} — the token
+    # itself is redacted from serialized output; prefer set_credentials()
+    auth: dict[str, Any] = Field(default_factory=dict)
     enabled: bool = True
+
+    def public_dict(self) -> dict[str, Any]:
+        """Serialize without credential material."""
+        d = self.model_dump(mode="json")
+        if d.get("auth"):
+            d["auth"] = {"type": self.auth.get("type", "configured"),
+                          "token": "<redacted>" if self.auth.get("token") else None}
+        return d
 
 
 # ---------------------------------------------------------------------------
@@ -403,8 +414,32 @@ class MemoryEntry(BaseModel):
     archived: bool = False
     access_count: int = 0
     expires_at: Optional[datetime] = None
+    # temporal validity (Graphiti-style): facts hold between valid_from and
+    # valid_to; expired facts are archived lazily and never recalled
+    valid_from: Optional[datetime] = None
+    valid_to: Optional[datetime] = None
     created_at: datetime = Field(default_factory=utcnow)
     updated_at: datetime = Field(default_factory=utcnow)
+
+    def is_valid(self, at: Optional[datetime] = None) -> bool:
+        now = at or utcnow()
+        if self.valid_from and now < self.valid_from:
+            return False
+        if self.valid_to and now > self.valid_to:
+            return False
+        return True
+
+
+class MemoryLink(BaseModel):
+    """A typed relationship between two memory entries — the knowledge-graph
+    layer on top of the flat memory store (Graphiti-inspired)."""
+
+    link_id: str = Field(default_factory=lambda: new_id("lnk"))
+    source_id: str
+    target_id: str
+    relation: str = "related"  # related | part_of | contradicts | supersedes | applies_to | caused_by | used_by
+    payload: dict[str, Any] = Field(default_factory=dict)
+    created_at: datetime = Field(default_factory=utcnow)
 
 
 # ---------------------------------------------------------------------------
@@ -632,6 +667,10 @@ class PerformanceStats(BaseModel):
     tool_efficiency: float = 1.0  # 1 - failed/total (1.0 with no data)
     evaluations_passed: int = 0
     evaluations_total: int = 0
+    # downstream success: whether work this agent delegated came back green
+    downstream_success: int = 0
+    downstream_total: int = 0
+    downstream_rate: float = 1.0
     updated_at: datetime = Field(default_factory=utcnow)
 
 

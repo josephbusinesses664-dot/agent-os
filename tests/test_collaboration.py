@@ -100,7 +100,10 @@ async def test_delegate_tool_permission_gate(svc):
     result = await svc.executor.execute(ctx, agent, "agent.delegate",
                                         {"agent": "frontend-lead", "description": "build ui"})
     assert not result["ok"]
-    assert "may not delegate" in result["error"]
+    # denied at the policy layer (default-deny) or by the handler's
+    # parent-relationship check — either way it is blocked technically
+    assert ("denied by permission policy" in result["error"]
+            or "may not delegate" in result["error"]), result
 
 
 @pytest.mark.asyncio

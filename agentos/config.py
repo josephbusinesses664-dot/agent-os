@@ -72,6 +72,11 @@ class Settings(BaseSettings):
     eval_sets_dir: str = "./eval_sets"
     perf_min_runs_for_influence: int = 3  # runs before stats shape routing
 
+    # --- Adapters -----------------------------------------------------------
+    github_token: Optional[str] = None  # read-only GitHub adapter
+    postgres_query_url: Optional[str] = None  # read-only SELECT URL (asyncpg)
+    browser_timeout_ms: int = 15000
+
     # --- Tools --------------------------------------------------------------
     tool_retry_transient: int = 2  # retries for transient tool failures
 

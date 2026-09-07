@@ -26,7 +26,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
 from agentos.db.store import EntityStore
-from agentos.domain.models import MemoryEntry, MemoryScope
+from agentos.domain.models import MemoryEntry, MemoryLink, MemoryScope
 
 _WORD_RE = re.compile(r"[a-z0-9]+")
 
@@ -66,16 +66,44 @@ def _tfidf_rank(query: str, entries: list[MemoryEntry]) -> dict[str, float]:
 
 _CHANGE_WORDS = {"updated", "changed", "changing", "now", "new", "current",
                   "latest", "previous", "final", "revised", "was", "were",
-                  "becomes", "is", "are", "the", "this"}
+                  "becomes", "becoming", "is", "are", "will", "the", "this",
+                  "not", "longer", "no", "still"}
+
+_NEG_MARKERS = (" not ", "never", "no longer", "isn't", "doesn't", "rejected",
+                "abandoned", "blocked", "no ")
+_CONTRAST_MARKERS = ("instead", "rather than", "changed to", "replaced",
+                     "switched", "moved away", "no longer")
 
 
 def _topic_key(kind: str, content: str) -> str:
-    """Stable topic for fact versioning: kind + top content words with
-    change-marker words stripped, so restating a changed fact supersedes the
-    old one instead of creating a parallel fact."""
+    """Stable topic for fact versioning: kind + content words up to the first
+    change/negation marker, so restating a changed fact ("deploy target is no
+    longer staging") maps to the same topic as the original ("deploy target is
+    staging") and supersedes it instead of creating a parallel fact."""
     words = _WORD_RE.findall(content.lower())
-    words = [w for w in words if len(w) > 3 and w not in _CHANGE_WORDS][:6]
-    return f"{kind}:{' '.join(words)}"
+    words = [w for w in words if len(w) > 1]
+    # skip leading change words ("the", "this", ...) before reading the subject
+    idx = 0
+    while idx < len(words) and words[idx] in _CHANGE_WORDS:
+        idx += 1
+    key_words: list[str] = []
+    for w in words[idx:]:
+        if w in _CHANGE_WORDS:
+            break
+        key_words.append(w)
+    if not key_words:
+        key_words = words[:4]
+    return f"{kind}:{' '.join(key_words[:6])}"
+
+
+def _contradicts(a: str, b: str) -> bool:
+    """Conservative contradiction signal: the newer statement (b) explicitly
+    negates or replaces the prior one (a). Plain evolution ('staging' →
+    'production') is recorded as a supersede, not a contradiction — the old
+    version is archived and linked either way, so history is never lost."""
+    lb = b.lower()
+    return (any(m in lb for m in _NEG_MARKERS)
+            or any(m in lb for m in _CONTRAST_MARKERS))
 
 
 class MemoryStore:
@@ -92,12 +120,15 @@ class MemoryStore:
                    tags: Optional[list[str]] = None,
                    source: str = "agent", provenance: str = "",
                    confidence: float = 0.8,
-                   supersedes: Optional[str] = None) -> MemoryEntry:
+                   supersedes: Optional[str] = None,
+                   valid_from: Optional[datetime] = None,
+                   valid_to: Optional[datetime] = None) -> MemoryEntry:
         entry = MemoryEntry(
             scope=MemoryScope(scope), owner_id=owner_id, kind=kind,
             content=content, importance=max(1, min(5, importance)),
             tags=tags or [], source=source, provenance=provenance,
             confidence=max(0.0, min(1.0, confidence)), supersedes=supersedes,
+            valid_from=valid_from, valid_to=valid_to,
         )
         await self.store.save(self._collection, entry)
         return entry
@@ -132,11 +163,19 @@ class MemoryStore:
         """
         entries = await self.by_owner(scope, owner_id)
         entries = [e for e in entries if not e.archived]
+        now = datetime.now(timezone.utc)
+        # lazy temporal expiry: a fact whose validity window has passed is
+        # archived (never silently deleted) and excluded from recall
+        expired = [e for e in entries if not e.is_valid(now)]
+        for e in expired:
+            e.archived = True
+            e.updated_at = now
+            await self.store.save(self._collection, e)
+        entries = [e for e in entries if not e.archived]
         if kinds:
             entries = [e for e in entries if e.kind in kinds]
         if not entries:
             return []
-        now = datetime.now(timezone.utc)
         if query:
             scores = _tfidf_rank(query, entries)
             by_id = {e.memory_id: e for e in entries}
@@ -220,10 +259,15 @@ class MemoryStore:
     async def save_fact(self, scope: MemoryScope | str, owner_id: str, content: str,
                         *, kind: str = "fact", importance: int = 3,
                         tags: Optional[list[str]] = None,
-                        source: str = "agent", provenance: str = "") -> MemoryEntry:
-        """Save a fact; if a fact on the same topic already exists for this
-        (scope, owner, kind), supersede it (Graphiti-style versioned facts —
-        changed facts never silently overwrite history)."""
+                        source: str = "agent", provenance: str = "",
+                        confidence: float = 0.8,
+                        valid_from: Optional[datetime] = None,
+                        valid_to: Optional[datetime] = None) -> MemoryEntry:
+        """Save a fact with contradiction resolution and versioning:
+        * same topic + same content → refresh importance (no-op-ish),
+        * same topic + contradicting content → archive old, link `contradicts`,
+        * same topic + evolution → archive old, link `supersedes`.
+        History is never silently overwritten (Graphiti-style)."""
         topic = _topic_key(kind, content)
         existing = await self.by_owner(scope, owner_id)
         prior = None
@@ -236,15 +280,82 @@ class MemoryStore:
             prior.updated_at = datetime.now(timezone.utc)
             await self.store.save(self._collection, prior)
             return prior
+        relation = "supersedes"
+        if prior is not None and _contradicts(prior.content, content):
+            relation = "contradicts"
         supersedes = prior.memory_id if prior else None
         if prior is not None:
             prior.archived = True
             prior.updated_at = datetime.now(timezone.utc)
             await self.store.save(self._collection, prior)
-        return await self.save(scope, owner_id, content, kind=kind,
-                               importance=importance, tags=tags,
-                               source=source, provenance=provenance,
-                               supersedes=supersedes)
+        entry = await self.save(scope, owner_id, content, kind=kind,
+                                importance=importance, tags=tags,
+                                source=source, provenance=provenance,
+                                confidence=confidence, supersedes=supersedes,
+                                valid_from=valid_from, valid_to=valid_to)
+        if prior is not None:
+            await self.link(entry.memory_id, prior.memory_id, relation,
+                            payload={"topic": topic})
+        return entry
+
+    # ------------------------------------------------------------------
+    # Knowledge-graph links (relationships between memory entries)
+    # ------------------------------------------------------------------
+    async def link(self, source_id: str, target_id: str, relation: str = "related",
+                   payload: Optional[dict] = None) -> MemoryLink:
+        link = MemoryLink(source_id=source_id, target_id=target_id,
+                          relation=relation, payload=payload or {})
+        await self.store.save("memory_links", link)
+        return link
+
+    async def unlink(self, link_id: str) -> None:
+        await self.store.delete("memory_links", link_id)
+
+    async def related(self, memory_id: str, relation: Optional[str] = None,
+                      limit: int = 30) -> list[MemoryLink]:
+        links = await self.store.list("memory_links", MemoryLink)
+        out = [l for l in links if l.source_id == memory_id or l.target_id == memory_id]
+        if relation:
+            out = [l for l in out if l.relation == relation]
+        out.sort(key=lambda l: l.created_at, reverse=True)
+        return out[:limit]
+
+    async def neighbors(self, memory_id: str, relation: Optional[str] = None,
+                        limit: int = 20) -> list[tuple[str, MemoryEntry]]:
+        """Entries connected to `memory_id` via any (or a specific) relation."""
+        links = await self.related(memory_id, relation=relation)
+        ids = {l.target_id if l.source_id == memory_id else l.source_id
+               for l in links}
+        entries = []
+        for mem_id in ids:
+            entry = await self.get(mem_id)
+            if entry and not entry.archived:
+                entries.append((mem_id, entry))
+        return entries[:limit]
+
+    async def graph(self, scope: MemoryScope | str, owner_id: str,
+                    limit: int = 80) -> dict:
+        """Knowledge-graph view of an owner's active memory:
+        {"nodes": [...], "edges": [...]} for visualization/analysis."""
+        entries = await self.by_owner(scope, owner_id)
+        active = [e for e in entries if not e.archived]
+        ids = {e.memory_id for e in active}
+        links = [l for l in await self.store.list("memory_links", MemoryLink)
+                 if l.source_id in ids and l.target_id in ids]
+        return {
+            "nodes": [{"id": e.memory_id, "kind": e.kind,
+                       "content": e.content[:120], "importance": e.importance,
+                       "scope": e.scope.value} for e in active[:limit]],
+            "edges": [{"source": l.source_id, "target": l.target_id,
+                       "relation": l.relation} for l in links],
+        }
+
+    async def timeline(self, scope: MemoryScope | str, owner_id: str,
+                       limit: int = 100) -> list[MemoryEntry]:
+        """Temporal view: entries ordered by when they became valid."""
+        entries = await self.by_owner(scope, owner_id)
+        entries.sort(key=lambda e: (e.valid_from or e.created_at))
+        return entries[-limit:]
 
     # ------------------------------------------------------------------
     # Episodes (task history as retrievable memory)

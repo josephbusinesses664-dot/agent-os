@@ -53,6 +53,7 @@ class RuntimeContext:
     active_skills: list = field(default_factory=list)
     spawn_depth: int = 0
     current_span: Optional[str] = None
+    browser: Any = None  # BrowserSession, created lazily, closed at run end
 
 
 @dataclass
@@ -232,6 +233,13 @@ class AgentRuntime:
                 span.result_summary = (result.content or "")[:200]
                 await span_cm.__aexit__(None, None, None)
                 ctx.current_span = None
+            # browser isolation: no session outlives its agent run
+            if getattr(ctx, "browser", None) is not None:
+                try:
+                    await ctx.browser.close()
+                except Exception:  # noqa: BLE001
+                    pass
+                ctx.browser = None
             await self._post_run(task, result)
         return result
 

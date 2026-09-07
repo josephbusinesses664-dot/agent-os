@@ -12,6 +12,11 @@ risk_level: low
 cost_level: low
 tags: [security, secrets, scanning, credentials]
 compatible_agents: [security-reviewer, devops-engineer]
+model_settings:
+  temperature: 0.2
+  max_tokens: 2048
+permissions:
+  scan.secrets: allow
 tools:
   - name: scan.secrets
     description: "Scan the workspace for exposed secrets (API keys, tokens, passwords). Returns file paths and the matched pattern category — never the secret value."

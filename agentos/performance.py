@@ -61,6 +61,20 @@ class PerformanceTracker:
                 pass
         return stats
 
+    async def record_downstream(self, agent_id: str, success: bool) -> None:
+        """Fold a delegated child's outcome into the delegating agent's stats
+        (self-improvement signal: leaders whose teams deliver are rewarded)."""
+        for window in ("all", "weekly", "daily"):
+            stats = await self._load(agent_id, window)
+            stats.downstream_total += 1
+            if success:
+                stats.downstream_success += 1
+            if stats.downstream_total:
+                stats.downstream_rate = round(
+                    stats.downstream_success / stats.downstream_total, 4)
+            stats.updated_at = datetime.now(timezone.utc)
+            await self.store.save(self._collection, stats)
+
     async def record_evaluation(self, record: EvaluationRecord) -> None:
         """Fold evaluator/review scores into agent stats (quality signal)."""
         if not record.agent_id:

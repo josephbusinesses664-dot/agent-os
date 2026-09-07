@@ -44,6 +44,21 @@ pytest -m integration   # integration tests (MCP always; Postgres/Redis env-gate
 - `test_autonomy.py` — the full agency loop end-to-end (plan → research →
   design → implement → verify → review → report) plus transient-failure
   recovery
+- `test_memory_r3.py` — knowledge-graph links, contradiction resolution,
+  temporal validity, evolution-vs-contradiction, provenance chains
+- `test_planning.py` — dynamic stage selection (minimal vs full pipeline),
+  `PLANNED_STAGES` marker, template-built workflows, engine execution
+- `test_browser.py` — real Playwright browser automation (open/snapshot/
+  click/type) against local pages, through the executor + permission system
+  (skipped when Playwright is not installed)
+- `test_mcp_auth_adapters.py` — MCP credential isolation/redaction,
+  read-only GitHub/Postgres/Docker adapters (technically enforced),
+  adapter least-privilege
+- `test_failure_analysis.py` — failure categories, recommendations,
+  best-match selection from evaluation history (cost/latency aware)
+- `test_integration_r3.py` — the round-3 integration test: memory + dynamic
+  capability selection + tool discovery + delegation + evaluation +
+  performance routing, all in one loop
 
 ## Integration env vars
 

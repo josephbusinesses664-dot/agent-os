@@ -26,6 +26,7 @@ from agentos.models.router import ModelRouter
 from agentos.observability.events import EventBus
 from agentos.observability.trace import Tracer
 from agentos.performance import PerformanceTracker
+from agentos.planning import DynamicPlanner
 from agentos.projects.service import ProjectService
 from agentos.prompts.library import PromptLibrary
 from agentos.registries.agent_registry import AgentRegistry
@@ -74,6 +75,7 @@ class Services:
     capabilities: CapabilityManager = None  # type: ignore[assignment]
     performance: PerformanceTracker = None  # type: ignore[assignment]
     evaluation: BenchmarkRunner = None  # type: ignore[assignment]
+    planner: DynamicPlanner = None  # type: ignore[assignment]
 
     mattermost: Any = None
     web_search: Any = None
@@ -137,6 +139,7 @@ class Services:
                                      retry_transient=self.settings.tool_retry_transient)
         self.evaluation = BenchmarkRunner(self, use_judge=True,
                                           judge_tier=self.settings.eval_judge_tier)
+        self.planner = DynamicPlanner()
 
     async def seed(self) -> dict[str, int]:
         """Populate default registries (idempotent)."""

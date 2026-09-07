@@ -378,6 +378,151 @@ async def _h_tool_health(ctx: Any, args: dict) -> dict:
     return {"ok": True, "report": report}
 
 
+async def _h_browser_open(ctx: Any, args: dict) -> dict:
+    return await _browser_session(ctx).open(args["url"])
+
+
+async def _h_browser_snapshot(ctx: Any, args: dict) -> dict:
+    return await _browser_session(ctx).snapshot()
+
+
+async def _h_browser_click(ctx: Any, args: dict) -> dict:
+    return await _browser_session(ctx).click(args["selector"])
+
+
+async def _h_browser_type(ctx: Any, args: dict) -> dict:
+    return await _browser_session(ctx).type_text(args["selector"], args["text"])
+
+
+async def _h_browser_evaluate(ctx: Any, args: dict) -> dict:
+    return await _browser_session(ctx).evaluate(args["expression"])
+
+
+async def _h_browser_screenshot(ctx: Any, args: dict) -> dict:
+    return await _browser_session(ctx).screenshot(args["path"])
+
+
+async def _h_browser_close(ctx: Any, args: dict) -> dict:
+    if getattr(ctx, "browser", None) is None:
+        return {"ok": True, "closed": True}
+    return await ctx.browser.close()
+
+
+def _browser_session(ctx: Any):
+    """Lazily create the per-run browser session (isolated per agent run)."""
+    if getattr(ctx, "browser", None) is None:
+        from agentos.integrations.browser import BrowserSession
+
+        ctx.browser = BrowserSession(ctx.workspace,
+                                     timeout_ms=int(
+                                         getattr(ctx.services.settings, "browser_timeout_ms", 15000)))
+    return ctx.browser
+
+
+async def _h_github(ctx: Any, args: dict) -> dict:
+    """Read-only GitHub adapter: search_repos | get_repo | list_issues."""
+    token = getattr(ctx.services.settings, "github_token", None)
+    if not token:
+        return {"ok": False, "error": "github adapter not configured (set GITHUB_TOKEN)"}
+    import httpx
+
+    action = args.get("action", "search_repos")
+    headers = {"Authorization": f"Bearer {token}",
+               "Accept": "application/vnd.github+json",
+               "X-GitHub-Api-Version": "2022-11-28"}
+    try:
+        async with httpx.AsyncClient(timeout=25, headers=headers) as client:
+            if action == "search_repos":
+                resp = await client.get("https://api.github.com/search/repositories",
+                                        params={"q": args.get("query", ""), "per_page": args.get("limit", 10)})
+                resp.raise_for_status()
+                body = resp.json()
+                return {"ok": True, "action": action,
+                        "repos": [{"name": r["full_name"], "stars": r.get("stargazers_count", 0),
+                                   "description": (r.get("description") or "")[:120]}
+                                  for r in body.get("items", [])]}
+            if action == "get_repo":
+                resp = await client.get(f"https://api.github.com/repos/{args['repo']}")
+                resp.raise_for_status()
+                r = resp.json()
+                return {"ok": True, "action": action,
+                        "repo": {"name": r["full_name"], "stars": r.get("stargazers_count", 0),
+                                 "language": r.get("language"), "description": (r.get("description") or "")[:200]}}
+            if action == "list_issues":
+                resp = await client.get(f"https://api.github.com/repos/{args['repo']}/issues",
+                                        params={"state": args.get("state", "open"), "per_page": args.get("limit", 10)})
+                resp.raise_for_status()
+                issues = resp.json()
+                return {"ok": True, "action": action,
+                        "issues": [{"number": i["number"], "title": i["title"],
+                                    "state": i["state"]} for i in issues]}
+            return {"ok": False, "error": f"unknown github action {action}"}
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "error": f"github adapter failed: {exc}"}
+
+
+async def _h_postgres_query(ctx: Any, args: dict) -> dict:
+    """Read-only PostgreSQL query adapter (production DBs — approval-gated)."""
+    # read-only gate first (security boundary), config check second
+    query = args.get("query", "").strip()
+    lowered = query.lower().lstrip()
+    if not lowered.startswith("select"):
+        return {"ok": False, "error": "postgres adapter is read-only: only SELECT allowed"}
+    url = getattr(ctx.services.settings, "postgres_query_url", None)
+    if not url:
+        return {"ok": False, "error": "postgres adapter not configured (set POSTGRES_QUERY_URL)"}
+    import asyncpg
+
+    try:
+        conn = await asyncpg.connect(url, timeout=10)
+        try:
+            rows = await conn.fetch(query)
+            columns = list(rows[0].keys()) if rows else []
+            data = [dict(r) for r in rows[: min(int(args.get("limit", 50)), 200)]]
+            return {"ok": True, "columns": columns, "rows": data,
+                    "row_count": len(data)}
+        finally:
+            await conn.close()
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "error": f"postgres adapter failed: {exc}"}
+
+
+async def _h_docker(ctx: Any, args: dict) -> dict:
+    """Read-only Docker adapter: ps | inspect | logs (never mutates)."""
+    import asyncio
+
+    action = args.get("action", "ps")
+    if action not in ("ps", "inspect", "logs"):
+        return {"ok": False, "error": f"docker.{action} not allowed (read-only: ps, inspect, logs)"}
+    cmd = ["docker", action]
+    if action == "ps":
+        cmd += ["--format", "{{.ID}}\t{{.Names}}\t{{.Image}}\t{{.Status}}"]
+    if action == "inspect":
+        cmd.append(args.get("container", ""))
+    if action == "logs":
+        cmd += ["--tail", str(args.get("lines", 50)), args.get("container", "")]
+    proc = await asyncio.create_subprocess_exec(
+        *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+    try:
+        out, err = await asyncio.wait_for(proc.communicate(), timeout=30)
+    except asyncio.TimeoutError:
+        proc.kill()
+        return {"ok": False, "error": "docker command timed out"}
+    if proc.returncode != 0:
+        return {"ok": False, "error": "docker not available: "
+                                       + err.decode(errors="replace")[:300]}
+    text = out.decode(errors="replace")
+    if action == "ps":
+        containers = []
+        for line in text.strip().splitlines():
+            parts = line.split("\t")
+            if len(parts) >= 4:
+                containers.append({"id": parts[0][:12], "name": parts[1],
+                                   "image": parts[2], "status": parts[3]})
+        return {"ok": True, "containers": containers, "count": len(containers)}
+    return {"ok": True, "action": action, "output": text[-8000:]}
+
+
 async def _h_agent_delegate(ctx: Any, args: dict) -> dict:
     """Delegate a subtask to a child agent. Bounded by engine spawn limits
     (depth, parallelism, budget, duplicate detection)."""
@@ -450,6 +595,26 @@ BUILTIN_TOOLS: list[ToolDef] = [
             permission_key="tool.health", risk_level="low", category="system"),
     ToolDef(name="agent.delegate", description="Delegate a bounded subtask to a child agent (depth/parallel/budget limited).",
             permission_key="agent.delegate", risk_level="medium", category="system"),
+    ToolDef(name="browser.open", description="Open a URL in the agent's isolated browser session (http/https/file/data).",
+            permission_key="browser.open", risk_level="low", category="browser"),
+    ToolDef(name="browser.snapshot", description="Read the current page: headings, links, buttons, inputs and visible text.",
+            permission_key="browser.snapshot", risk_level="low", category="browser"),
+    ToolDef(name="browser.click", description="Click the first element matching a CSS selector on the current page.",
+            permission_key="browser.click", risk_level="low", category="browser"),
+    ToolDef(name="browser.type", description="Type text into the first input matching a CSS selector.",
+            permission_key="browser.type", risk_level="low", category="browser"),
+    ToolDef(name="browser.screenshot", description="Save a full-page screenshot into the workspace and return its path.",
+            permission_key="browser.screenshot", risk_level="low", category="browser"),
+    ToolDef(name="browser.evaluate", description="Run a JavaScript expression in the page (high risk — approval gated).",
+            permission_key="browser.evaluate", risk_level="high", category="browser"),
+    ToolDef(name="browser.close", description="Close the agent's browser session (releases the process).",
+            permission_key="browser.close", risk_level="low", category="browser"),
+    ToolDef(name="github", description="Read-only GitHub adapter: search_repos | get_repo | list_issues.",
+            permission_key="github", risk_level="medium", category="adapter"),
+    ToolDef(name="postgres.query", description="Read-only SQL SELECT against the configured POSTGRES_QUERY_URL (approval gated).",
+            permission_key="postgres.query", risk_level="high", category="adapter"),
+    ToolDef(name="docker", description="Read-only Docker adapter: ps | inspect | logs (never mutates).",
+            permission_key="docker", risk_level="medium", category="adapter"),
 ]
 
 HANDLERS: dict[str, ToolHandler] = {
@@ -474,6 +639,16 @@ HANDLERS: dict[str, ToolHandler] = {
     "tool.discover": _h_tool_discover,
     "tool.health": _h_tool_health,
     "agent.delegate": _h_agent_delegate,
+    "browser.open": _h_browser_open,
+    "browser.snapshot": _h_browser_snapshot,
+    "browser.click": _h_browser_click,
+    "browser.type": _h_browser_type,
+    "browser.evaluate": _h_browser_evaluate,
+    "browser.screenshot": _h_browser_screenshot,
+    "browser.close": _h_browser_close,
+    "github": _h_github,
+    "postgres.query": _h_postgres_query,
+    "docker": _h_docker,
 }
 
 

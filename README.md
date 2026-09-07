@@ -62,17 +62,20 @@ I want to build a new SaaS product.            → executive creates a project
 |---|---|---|
 | Control plane API + admin UI | `agentos/api/`, `agentos/admin/` | FastAPI, single-file SPA |
 | Orchestration | `agentos/orchestration/` | LangGraph state machine, checkpoints, retries, approval gates |
-| Agent runtime | `agentos/agents/` | observe → plan → act → **verify** → recover loop, inbox-fed context, auto memory, tracing |
+| Agent runtime | `agentos/agents/` | observe → plan → act → **verify** → recover loop, inbox-fed context, auto memory, tracing, per-run browser session |
 | Agent registry | `agentos/registries/agent_registry.py` | 41 agents in a hierarchical org chart |
 | Skill registry | `agentos/registries/skill_registry.py` + `skills/` | 100+ skills, 20 branches, progressive loading |
 | Capabilities | `agentos/capabilities/` | skills become executable: tools + hooks + validators + tests (sandboxed inline code) |
+| Dynamic planning | `agentos/planning.py` + `workflows/stage_templates.yaml` | the executive plans required stages per goal; simple requests never run the full pipeline |
 | Model layer | `agentos/models/` | providers (Claude/DeepSeek/GLM/OpenAI-compat/echo), router, failover, **performance-aware routing** |
 | Budgets | `agentos/budgets/` | global/project/agent/task limits, auto-downgrade |
-| Tools + MCP | `agentos/tools/`, `agentos/registries/mcp_registry.py` | capability discovery, scoped permissions, strategy-change retries, timeouts, health checks, MCP lifecycle |
-| Memory | `agentos/memory/` | layered memory (task/project/agent/org/user) with TF-IDF semantic recall, episodes, versioned facts, provenance, consolidation |
+| Tools + MCP | `agentos/tools/`, `agentos/registries/mcp_registry.py` | capability discovery, **default-deny permissions**, strategy-change retries, timeouts, health checks, MCP lifecycle + credential isolation |
+| Browser | `agentos/integrations/browser.py` | Playwright-powered automation (open/snapshot/click/type/evaluate/screenshot) through the executor + permission system |
+| Adapters | `agentos/tools/builtin.py` | read-only GitHub, Postgres, Docker adapters (technically enforced, approval-gated) |
+| Memory | `agentos/memory/` | layered memory (task/project/agent/org/user) with TF-IDF semantic recall, **knowledge-graph links**, **contradiction resolution**, versioned + temporal facts, provenance, consolidation |
 | Messaging | `agentos/messaging/` | structured agent-to-agent messages: handoffs, blockers, challenges, escalation |
-| Performance | `agentos/performance.py` | operational stats that shape routing and delegation (not cosmetic XP) |
-| Evaluation | `agentos/evaluation/` + `eval_sets/` | deterministic + LLM-judge scoring, regression datasets, benchmark runner, leaderboards |
+| Performance | `agentos/performance.py` | operational stats that shape routing and delegation; **downstream-success tracking** (not cosmetic XP) |
+| Evaluation | `agentos/evaluation/` + `eval_sets/` | deterministic + LLM-judge scoring, regression datasets, benchmark runner, leaderboards, **failure analysis → recommendations**, capability comparison |
 | Tracing | `agentos/observability/trace.py` | span chains agent → stage → model → tool → evaluator |
 | Projects & tasks | `agentos/projects/`, `agentos/tasks/` | dependency graphs, auto-unblocking |
 | Security | `agentos/security/` | permissions, scopes, approvals, audit log, secret redaction |
@@ -100,8 +103,28 @@ agent-os evaluate basic       # benchmark a regression dataset
 agent-os leaderboard          # agent performance leaderboard
 agent-os traces [task_id]     # span chain for a task
 agent-os consolidate          # memory consolidation
+agent-os plan "goal"          # show the dynamic stage plan for a goal
+agent-os plan "goal" --execute  # run exactly the planned stages
+agent-os analyze [goal]       # failure analysis + who-does-this-best
 agent-os ask "your goal"      # executive flow
 agent-os demo                 # offline end-to-end demo
+```
+
+## Dynamic planning
+
+Simple requests do **not** blindly run every stage. The executive plans the
+required stages from the goal (`understanding → … → report`, with only the
+relevant middle stages) — a one-line README runs 5 stages, while a major
+product launch still expands to the full pipeline. Override with a
+`PLANNED_STAGES: [research, report]` marker in the goal, or `--full` for the
+complete 0→100 set.
+
+```bash
+agent-os plan "fix the login button"
+# Stages (5): understanding → implement-frontend → implement-backend → testing → report
+
+agent-os plan "launch a full saas product" --full
+agent-os plan "research the market" --execute
 ```
 
 ## The 0 → 100 workflow

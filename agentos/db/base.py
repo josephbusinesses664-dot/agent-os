@@ -27,6 +27,7 @@ COLLECTIONS = (
     "events",
     "audit",
     "memory",
+    "memory_links",
     "approvals",
     "budgets",
     "messages",

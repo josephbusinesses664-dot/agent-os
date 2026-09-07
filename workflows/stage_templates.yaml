@@ -1,0 +1,103 @@
+# Reusable workflow stage templates for dynamic planning.
+# The DynamicPlanner assembles a workflow from these based on the goal:
+# simple requests get only the stages they need; major projects can still
+# request the full 0→100 pipeline. Each template maps to an agent role and
+# carries an executable instruction (PLANNED_TOOL_CALLS AUTO artifacts).
+
+understanding:
+  name: Understanding
+  agent_role: executive
+  description: >
+    Restate the goal, the decision it informs and the success criteria.
+    Write to artifacts/understanding.md.
+    PLANNED_TOOL_CALLS: [{"tool":"filesystem.write","args":{"path":"artifacts/understanding.md","content":"AUTO"}}]
+
+research:
+  name: Research
+  agent_role: research-director
+  description: >
+    Gather evidence about the goal: signals, risks, open questions.
+    Write to artifacts/research.md.
+    PLANNED_TOOL_CALLS: [{"tool":"filesystem.write","args":{"path":"artifacts/research.md","content":"AUTO"}}]
+
+community:
+  name: Community Intelligence
+  agent_role: community-researcher
+  description: >
+    Pain points, feature requests, buying signals and unmet demand from
+    communities. Write to artifacts/community.md.
+    PLANNED_TOOL_CALLS: [{"tool":"filesystem.write","args":{"path":"artifacts/community.md","content":"AUTO"}}]
+
+requirements:
+  name: Requirements
+  agent_role: requirements-analyst
+  description: >
+    Extract precise, testable requirements and acceptance criteria.
+    Write to artifacts/requirements.md.
+    PLANNED_TOOL_CALLS: [{"tool":"filesystem.write","args":{"path":"artifacts/requirements.md","content":"AUTO"}}]
+
+design:
+  name: Design
+  agent_role: design-director
+  description: >
+    Design direction: flows, hierarchy, accessibility, quality bar.
+    Write to artifacts/design.md.
+    PLANNED_TOOL_CALLS: [{"tool":"filesystem.write","args":{"path":"artifacts/design.md","content":"AUTO"}}]
+
+implement-frontend:
+  name: Frontend Implementation
+  agent_role: frontend-lead
+  description: >
+    Implement the frontend per requirements and design. Type safety, error
+    handling, accessibility. Write a build report to
+    artifacts/implementation-frontend.md.
+    PLANNED_TOOL_CALLS: [{"tool":"filesystem.write","args":{"path":"artifacts/implementation-frontend.md","content":"AUTO"}}]
+
+implement-backend:
+  name: Backend Implementation
+  agent_role: backend-lead
+  description: >
+    Implement the backend/API per requirements. Validation, error handling,
+    tests. Write a build report to artifacts/implementation-backend.md.
+    PLANNED_TOOL_CALLS: [{"tool":"filesystem.write","args":{"path":"artifacts/implementation-backend.md","content":"AUTO"}}]
+
+testing:
+  name: Testing
+  agent_role: test-engineer
+  description: >
+    Run tests against the implementation and report actual results. Write
+    to artifacts/tests.md.
+    PLANNED_TOOL_CALLS: [{"tool":"filesystem.write","args":{"path":"artifacts/tests.md","content":"AUTO"}}]
+
+security:
+  name: Security Review
+  agent_role: security-reviewer
+  description: >
+    Review for secrets, injection, unsafe operations and excessive
+    permissions. Write findings to artifacts/security.md.
+    PLANNED_TOOL_CALLS: [{"tool":"filesystem.write","args":{"path":"artifacts/security.md","content":"AUTO"}}]
+
+review:
+  name: Review
+  agent_role: code-reviewer
+  description: >
+    Review the implementation against requirements and the quality bar.
+    Write structured findings to artifacts/review.md.
+    PLANNED_TOOL_CALLS: [{"tool":"filesystem.write","args":{"path":"artifacts/review.md","content":"AUTO"}}]
+
+deploy:
+  name: Deployment
+  agent_role: deployment-agent
+  description: >
+    Deploy (staging). Production requires approval. Write the deployment
+    report to artifacts/deploy.md.
+    PLANNED_TOOL_CALLS: [{"tool":"filesystem.write","args":{"path":"artifacts/deploy.md","content":"AUTO"}}]
+  requires_approval: true
+
+report:
+  name: Final Report
+  agent_role: executive
+  description: >
+    Synthesize the run into a final report: outcome, artifacts, next steps.
+    Write to artifacts/final-report.md.
+    PLANNED_TOOL_CALLS: [{"tool":"filesystem.write","args":{"path":"artifacts/final-report.md","content":"AUTO"}}]

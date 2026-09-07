@@ -31,7 +31,23 @@
 | web.scrape / api.call | deny | granted to research roles |
 | shell | deny | high risk → approval required |
 | deploy / github | deny | granted to deployment/devops roles; stages still approval-gated |
+| postgres.query / docker | deny | read-only adapters, granted to db/devops roles; postgres also approval-gated |
+| browser.* | deny | granted to research/design/QA/frontend roles; `browser.evaluate` is high-risk |
+| agent.delegate | deny | only a child's parent (or explicit grant) may delegate |
 | mcp.call | deny | granted per server |
+
+Every tool not explicitly granted **defaults to deny** for agents created
+ad-hoc (CLI/API) — least privilege is enforced in the executor, not just in
+prompts. The org-chart agents carry explicit grants.
+
+## Credential isolation
+
+- MCP credentials set via `POST /api/mcp/{name}/credentials` live only in
+  process memory, are never persisted to the store, and never appear in
+  serialized server output (`public_dict()` redacts token material).
+- A new credential forces a fresh MCP client for that server (no stale auth).
+- External adapters (GitHub/Postgres/Docker) are read-only by construction:
+  the read-only gate runs *before* any connection or config check.
 
 ## Approval flow
 

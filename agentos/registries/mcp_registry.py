@@ -18,10 +18,15 @@ from agentos.domain.models import McpServer
 
 
 class McpClient:
-    """Minimal MCP streamable-HTTP client (JSON-RPC 2.0 over HTTP)."""
+    """Minimal MCP streamable-HTTP client (JSON-RPC 2.0 over HTTP).
 
-    def __init__(self, server: McpServer) -> None:
+    Authentication is isolated per server: headers come from `server.auth`
+    config or registry-supplied credentials (in-memory only, never logged).
+    """
+
+    def __init__(self, server: McpServer, credentials: Optional[dict] = None) -> None:
         self.server = server
+        self._credentials = credentials or {}
         self._session_id: Optional[str] = None
 
     async def initialize(self) -> dict:
@@ -38,10 +43,29 @@ class McpClient:
     async def call_tool(self, tool: str, args: dict) -> dict:
         return await self._request("tools/call", {"name": tool, "arguments": args})
 
+    def _auth_headers(self) -> dict:
+        auth = self.server.auth or {}
+        token = auth.get("token") or self._credentials.get("token")
+        headers: dict = {}
+        if not token:
+            return headers
+        auth_type = auth.get("type", "bearer")
+        if auth_type == "bearer":
+            headers["Authorization"] = f"Bearer {token}"
+        elif auth_type == "header":
+            headers[auth.get("header", "Authorization")] = token
+        elif auth_type == "basic":
+            import base64
+
+            raw = f"{auth.get('user', '')}:{token}".encode()
+            headers["Authorization"] = "Basic " + base64.b64encode(raw).decode()
+        return headers
+
     async def _request(self, method: str, params: dict) -> dict:
         if not self.server.endpoint:
             raise ValueError(f"MCP server {self.server.name} has no endpoint")
         headers = {"Content-Type": "application/json", "Accept": "application/json, text/event-stream"}
+        headers.update(self._auth_headers())
         if self._session_id:
             headers["Mcp-Session-Id"] = self._session_id
         body = {"jsonrpc": "2.0", "id": 1, "method": method, "params": params}
@@ -71,11 +95,21 @@ class McpRegistry:
         self._clients: dict[str, McpClient] = {}
         self._tool_cache: dict[str, list[dict]] = {}  # server -> discovered tools
         self._health_cache: dict[str, str] = {}
+        self._credentials: dict[str, dict] = {}  # server -> token (in-memory only)
 
     async def list(self, enabled_only: bool = True) -> list[McpServer]:
         servers = await self.store.list(self._collection, McpServer)
         servers.sort(key=lambda s: s.name)
         return [s for s in servers if s.enabled or not enabled_only]
+
+    async def list_public(self) -> list[dict]:
+        """Serialized without credential material (for API/UI output)."""
+        return [s.public_dict() for s in await self.list()]
+
+    # -- credential isolation (in-memory only, never persisted/logged) -----
+    async def set_credentials(self, server_name: str, token: str) -> None:
+        self._credentials[server_name] = {"token": token}
+        self._clients.pop(server_name, None)  # force reconnect with new auth
 
     async def get(self, name: str) -> Optional[McpServer]:
         return await self.store.get(self._collection, name, McpServer)
@@ -155,7 +189,8 @@ class McpRegistry:
 
     def client_for(self, server: McpServer) -> McpClient:
         if server.name not in self._clients:
-            self._clients[server.name] = McpClient(server)
+            self._clients[server.name] = McpClient(
+                server, self._credentials.get(server.name))
         return self._clients[server.name]
 
     async def call_tool(self, server_name: str, tool: str, args: dict, agent_id: str = "") -> dict:

@@ -69,6 +69,11 @@ def trajectory_analysis(records: list[EvaluationRecord]) -> dict[str, Any]:
             "recommendations": recommendations}
 
 
+def compare_capabilities(records: list[EvaluationRecord], limit: int = 10) -> list[dict]:
+    """Which capability (skill) delivers the best cost-vs-quality outcome."""
+    return leaderboard(records, group_by="skill_id", limit=limit)
+
+
 def best_for(records: list[EvaluationRecord], task_kind: str = "") -> dict[str, Any]:
     """One-line answer to 'who should do this work?' — used by the router's
     delegation advice when a group of agents can handle a task type."""

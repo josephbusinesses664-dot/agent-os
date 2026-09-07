@@ -50,6 +50,10 @@ class AgentCreate(BaseModel):
     parent_agent: Optional[str] = None
 
 
+class McpCredentials(BaseModel):
+    token: str
+
+
 def create_app(svc: Any) -> FastAPI:
     if svc is not None:
         svc_holder["svc"] = svc
@@ -184,12 +188,24 @@ def create_app(svc: Any) -> FastAPI:
 
     @app.get("/api/mcp")
     async def list_mcp():
-        return [s.model_dump(mode="json") for s in await S().mcp_registry.list()]
+        return await S().mcp_registry.list_public()  # credentials redacted
 
     @app.post("/api/mcp")
     async def register_mcp(server: McpServer):
         await S().mcp_registry.register(server)
-        return server.model_dump(mode="json")
+        return server.public_dict()
+
+    @app.post("/api/mcp/{name}/credentials")
+    async def set_mcp_credentials(name: str, body: McpCredentials):
+        await S().mcp_registry.set_credentials(name, body.token)
+        return {"server": name, "credentials": "set"}
+
+    # -- memory graph -------------------------------------------------------
+    @app.get("/api/memory/graph")
+    async def memory_graph(scope: str = "project", owner_id: str = ""):
+        if not owner_id:
+            return {"error": "owner_id required"}
+        return await S().memory.graph(scope, owner_id)
 
     @app.get("/api/apis")
     async def list_apis():
@@ -255,10 +271,33 @@ def create_app(svc: Any) -> FastAPI:
     @app.get("/api/evaluation/datasets")
     async def eval_datasets():
         from agentos.evaluation.datasets import list_datasets
-        from agentos.config import Settings
 
-        root = Path(S().settings.eval_sets_dir)
-        return list_datasets(root)
+        return list_datasets(Path(S().settings.eval_sets_dir))
+
+    @app.get("/api/evaluation/failure-analysis")
+    async def failure_analysis():
+        from agentos.evaluation.failure_analysis import analyze_svc
+
+        return await analyze_svc(S())
+
+    @app.get("/api/evaluation/compare")
+    async def compare(group_by: str = "skill_id", limit: int = 10):
+        from agentos.evaluation import leaderboard
+        from agentos.domain.models import EvaluationRecord
+
+        records = [EvaluationRecord.model_validate(r)
+                   for r in await S().entity_store.list_docs("evaluation")]
+        return leaderboard(records, group_by=group_by, limit=limit)
+
+    # -- dynamic planning ---------------------------------------------------
+    @app.post("/api/plan")
+    async def plan_goal(goal: str):
+        return S().planner.plan_summary(goal)
+
+    @app.post("/api/plan/execute")
+    async def execute_planned(goal: str, expand_full: bool = False):
+        return await S().engine.execute_dynamic(goal, user_id="api",
+                                                expand_full=expand_full)
 
     # -- tool / mcp health --------------------------------------------------
     @app.get("/api/tools/health")

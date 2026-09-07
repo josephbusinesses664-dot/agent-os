@@ -459,20 +459,89 @@ def evaluate(dataset: str = typer.Argument("basic", help="Dataset name (eval_set
 
 @app.command()
 def leaderboard(metric: str = typer.Option("success_rate", "--metric"),
-                limit: int = typer.Option(10, "--limit")):
-    """Show the agent performance leaderboard (success_rate | avg_cost |
-    tool_efficiency | avg_review_score)."""
+                limit: int = typer.Option(10, "--limit"),
+                group_by: str = typer.Option("agent", "--group-by",
+                                             help="agent | model | skill")):
+    """Show the leaderboard (success_rate | avg_cost | tool_efficiency |
+    avg_review_score), grouped by agent, model or capability."""
     async def _main():
         svc = await _load_svc()
-        rows = await svc.performance.leaderboard(limit=limit, metric=metric)
-        typer.echo(f"{'AGENT':<28} {'RUNS':<6} {'SUCCESS':<9} {'AVG COST':<10} "
-                   f"{'TOOL EFF':<9} {'REVIEW':<8} {metric}")
+        if group_by == "agent":
+            rows = await svc.performance.leaderboard(limit=limit, metric=metric)
+            typer.echo(f"{'AGENT':<28} {'RUNS':<6} {'SUCCESS':<9} {'AVG COST':<10} "
+                       f"{'TOOL EFF':<9} {'REVIEW':<8} {metric}")
+            typer.echo("-" * 90)
+            for r in rows:
+                typer.echo(f"{r['agent_id']:<28} {r['runs']:<6} "
+                           f"{r['success_rate'] * 100:>5.0f}%  "
+                           f"${r['avg_cost']:<9.5f} {r['tool_efficiency']:<9.2f} "
+                           f"{r['avg_review_score']:<8.2f} {r.get(metric)}")
+            return
+        from agentos.domain.models import EvaluationRecord
+        from agentos.evaluation import leaderboard as eval_leaderboard
+
+        key = {"model": "model_id", "skill": "skill_id"}.get(group_by, "agent_id")
+        records = [EvaluationRecord.model_validate(r)
+                   for r in await svc.entity_store.list_docs("evaluation")]
+        rows = eval_leaderboard(records, group_by=key, limit=limit)
+        typer.echo(f"{'KEY':<32} {'RUNS':<6} {'PASS':<9} {'SCORE':<8} {'AVG COST':<12} {'LATENCY'}")
         typer.echo("-" * 90)
         for r in rows:
-            typer.echo(f"{r['agent_id']:<28} {r['runs']:<6} "
-                       f"{r['success_rate'] * 100:>5.0f}%  "
-                       f"${r['avg_cost']:<9.5f} {r['tool_efficiency']:<9.2f} "
-                       f"{r['avg_review_score']:<8.2f} {r.get(metric)}")
+            typer.echo(f"{r['key']:<32} {r['runs']:<6} "
+                       f"{r['pass_rate'] * 100:>5.0f}%  {r['avg_score']:<8.2f} "
+                       f"${r['avg_cost']:<11.5f} {r['avg_latency_ms']}ms")
+
+    _run(_main())
+
+
+@app.command()
+def plan(goal: str = typer.Argument(..., help="The goal to plan for"),
+         execute: bool = typer.Option(False, "--execute",
+                                      help="Run the planned workflow immediately"),
+         expand_full: bool = typer.Option(False, "--full",
+                                          help="Plan the full pipeline for a major project")):
+    """Show (or execute) the dynamic stage plan for a goal."""
+    async def _main():
+        svc = await _load_svc()
+        summary = svc.planner.plan_summary(goal)
+        stage_list = " → ".join(summary["stages"])
+        agent_list = ", ".join(summary["agents"])
+        typer.echo(f"Goal: {summary['goal']}")
+        typer.echo(f"Stages ({summary['count']}): {stage_list}")
+        typer.echo(f"Agents: {agent_list}")
+        if execute:
+            result = await svc.engine.execute_dynamic(goal, user_id="cli",
+                                                      expand_full=expand_full)
+            planned = ", ".join(result["planned_stages"])
+            typer.echo(f"\nRun {result['run_id']} → {result['status']}")
+            typer.echo(f"Planned stages: {planned}")
+
+    _run(_main())
+
+
+@app.command()
+def analyze(goal: Optional[str] = typer.Argument(None,
+            help="Optional goal to get a best-match recommendation for")):
+    """Failure analysis + recommendations from evaluation history."""
+    async def _main():
+        svc = await _load_svc()
+        from agentos.evaluation.failure_analysis import analyze_svc
+
+        analysis = await analyze_svc(svc, goal or "")
+        summary = analysis["failure_summary"]
+        typer.echo(f"Failed runs: {summary['total_failed']}  by class: {summary['by_class']}")
+        typer.echo("Recommendations:")
+        for rec in analysis["recommendations"]:
+            typer.echo(f"  - {rec}")
+        if analysis.get("best_match"):
+            bm = analysis["best_match"]
+            caps = ", ".join(bm["recommended_capabilities"])
+            typer.echo(f"\nTask class: {bm['task_class']}")
+            typer.echo(f"Recommended agent: {bm['recommended_agent'] or 'none (insufficient history)'}")
+            typer.echo(f"Recommended capabilities: {caps}")
+            for c in bm["candidates"][:3]:
+                typer.echo(f"  {c['agent_id']:<24} pass {c['pass_rate'] * 100:>3.0f}% "
+                           f"score {c['avg_score']} cost ${c['avg_cost']:.5f}")
 
     _run(_main())
 

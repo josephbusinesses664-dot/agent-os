@@ -33,6 +33,17 @@ _WRITE_CMDS = __import__("re").compile(r"(;|&&|\|\||>|\brm\b|\bmv\b|\bmkdir\b|"
                                        r"curl\s+-X|git\s+push|git\s+commit|"
                                        r"docker\s+compose\s+up|pip\s+install\s|npm\s+i\s)")
 
+# Least privilege by default: tools that touch the network, external systems,
+# credentials, deployment or the outside world are DENIED unless the agent
+# explicitly lists them. The org chart grants these selectively; agents
+# created ad-hoc (CLI/API) get no implicit access.
+_DEFAULT_DENY = {
+    "shell", "web.scrape", "api.call", "mcp.call", "deploy", "github",
+    "postgres.query", "docker", "agent.delegate",
+    "browser.open", "browser.snapshot", "browser.click", "browser.type",
+    "browser.screenshot", "browser.evaluate", "browser.close",
+}
+
 
 class ToolDeniedError(PermissionError):
     pass
@@ -69,9 +80,11 @@ class ToolExecutor:
         if tool is None or not tool.enabled:
             return {"ok": False, "error": f"unknown or disabled tool: {tool_name}"}
 
-        # 1. permission policy (allow | deny | allow:scope)
+        # 1. permission policy (allow | deny | allow:scope); explicit entries
+        #    win, otherwise high-risk tools default to deny (least privilege)
         permission_key = tool.permission_key or tool.name
-        allowed = agent.permissions.get(permission_key, "allow")
+        allowed = agent.permissions.get(
+            permission_key, "deny" if permission_key in _DEFAULT_DENY else "allow")
         if allowed == "deny":
             await self._audit(ctx, agent, tool_name, "tool.denied", "denied",
                               {"reason": "permission policy"})
