@@ -291,6 +291,14 @@ class OrchestratorEngine:
             return result
 
         description = stage.description or f"Execute workflow stage {stage.name}."
+        # on retries, tell the agent its previous approach failed
+        previous = await self.svc.tasks.by_project(project.project_id)
+        attempts = sum(1 for t in previous
+                       if t.title.startswith(f"{stage.name} (") and t.status.value == "failed")
+        if attempts:
+            description = (description + "\n\nRETRY NOTE: a previous attempt at this stage "
+                           "failed to produce usable output. Change your approach — gather "
+                           "evidence with tools FIRST, then write the complete deliverable.")
         context = self._prior_stage_context(run_id, stage.stage_id)
         if context:
             description = (description + "\n\n=== WORK COMPLETED SO FAR (read this before "

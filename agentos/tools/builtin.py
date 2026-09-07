@@ -291,6 +291,23 @@ async def _h_web_search(ctx: Any, args: dict) -> dict:
             if len(results) >= limit:
                 break
         if not results:
+            # rate-limit fallback: the lite endpoint
+            url2 = "https://lite.duckduckgo.com/lite/?q=" + urllib.parse.quote(query)
+            async with httpx.AsyncClient(timeout=25, follow_redirects=True,
+                                         headers={"User-Agent": "Mozilla/5.0 (X11; Linux x86_64; rv:125.0) Gecko/20100101 Firefox/125.0"}) as client:
+                resp2 = await client.get(url2)
+                resp2.raise_for_status()
+            for m2 in re.finditer(r'<a[^>]+href="([^"]+)"[^>]*class="result-link"[^>]*>(.*?)</a>'
+                                  r'.*?<td[^>]*class="result-snippet"[^>]*>(.*?)</td>',
+                                  resp2.text, re.S):
+                results.append({
+                    "title": re.sub(r"<[^>]+>", "", m2.group(2)).strip(),
+                    "url": m2.group(1),
+                    "snippet": re.sub(r"<[^>]+>", "", m2.group(3)).strip()[:400],
+                })
+                if len(results) >= limit:
+                    break
+        if not results:
             return {"ok": False, "error": "no results (DDG may be rate-limiting; retry shortly)"}
         return {"ok": True, "query": query, "results": results, "count": len(results)}
     except Exception as exc:  # noqa: BLE001

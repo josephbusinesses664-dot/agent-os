@@ -405,32 +405,62 @@ class AgentRuntime:
 
         # -- minimum-work guard: never let an opening line pass as the work --
         if not result.error and len((result.content or "").strip()) < 400:
-            # one explicit chance to finish the actual work
-            messages.append({
-                "role": "user",
-                "content": ("[Your answer so far is just an opening — the actual work "
-                            "is missing. Do the full task now and give the complete "
-                            "final deliverable in your answer: analysis, findings, "
-                            "conclusions — everything, in full detail.]"),
-            })
-            try:
-                response = await self._call_with_failover(model_id, system, messages, task)
-                final_text = clean_content(response.content or "")
-                if len(final_text) >= 400:
-                    result.content = final_text
-                else:
-                    result.content = result.content or final_text
-                    result.error = "stage produced no substantive output"
-                    result.fail_class = "logic"
-            except Exception as exc:  # noqa: BLE001
-                result.error = str(exc)
-                result.fail_class = classify_error(str(exc))
+            final_text = await self._finish_with_work(
+                model_id, system, messages, task,
+                ("[Your answer so far is just an opening — the actual work is "
+                 "missing. Do the full task now: use tools to gather what you "
+                 "need, then give the complete final deliverable in your answer "
+                 "— analysis, findings, conclusions, everything, in full detail.]"))
+            if len(final_text) >= 400:
+                result.content = final_text
+            else:
+                result.content = result.content or final_text
+                result.error = "stage produced no substantive output"
+                result.fail_class = "logic"
 
         # -- verify step: evidence over claims ------------------------------
         if not result.error:
             await self._verify_result(task, result)
         result.reflection = self._build_reflection(result, task)
         return result
+
+    async def _finish_with_work(self, model_id: str, system: str,
+                                messages: list[dict], task: Task,
+                                nudge: str) -> str:
+        """After a stub answer: demand the real work, allowing up to three
+        more tool-capable turns, and return the final content."""
+        import json as _json
+
+        messages.append({"role": "user", "content": nudge})
+        executed = set()
+        for _ in range(3):
+            try:
+                response = await self._call_with_failover(model_id, system, messages, task)
+            except Exception as exc:  # noqa: BLE001
+                return f"_(finish attempt failed: {exc})_"
+            calls = parse_tool_calls(response)
+            for call in calls:
+                call["tool"] = self._schema_name_map.get(call["tool"], call["tool"])
+            fresh = []
+            for call in calls:
+                sig = call.get("tool", "") + _json.dumps(call.get("args", {}), sort_keys=True)
+                if sig in executed:
+                    continue
+                executed.add(sig)
+                fresh.append(call)
+            if not fresh:
+                return clean_content(response.content or "")
+            for call in fresh:
+                tool_name = call.get("tool", "")
+                args = call.get("args", {}) if isinstance(call.get("args"), dict) else {}
+                tool_result = await self.ctx.executor.execute(self.ctx, self.agent,
+                                                              tool_name, args)
+                result.tool_results.append({**tool_result, "tool": tool_name})
+                messages.append({
+                    "role": "user",
+                    "content": f"[tool result for {tool_name}]\n{_json.dumps(tool_result)[:4000]}",
+                })
+        return clean_content(response.content or "")
 
     async def _verify_result(self, task: Task, result: AgentRunResult) -> None:
         """Deterministic verification: claimed artifacts must exist on disk,
