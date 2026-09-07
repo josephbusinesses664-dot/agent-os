@@ -1,0 +1,60 @@
+diff --git a/agentos/bootstrap.py b/agentos/bootstrap.py
+index b1070e2..4701520 100644
+--- a/agentos/bootstrap.py
++++ b/agentos/bootstrap.py
+@@ -34,7 +34,8 @@ async def build_app(settings: Optional[Settings] = None) -> Services:
+     # mattermost
+     if settings.mattermost_url and settings.mattermost_token:
+         client = MattermostClient(settings.mattermost_url, settings.mattermost_token)
+-        service = MattermostService(settings, client)
++        service = MattermostService(settings, client,
++                                 on_command=await on_mattermost_command(svc))
+         svc.mattermost = service
+         service.svc = svc
+         if await service.connect():
+diff --git a/agentos/cli/main.py b/agentos/cli/main.py
+index 026ef02..c9ca041 100644
+--- a/agentos/cli/main.py
++++ b/agentos/cli/main.py
+@@ -410,7 +410,8 @@ def approvals(action: str = typer.Argument(..., help="list | approve | reject"),
+                 typer.echo(f"  {a.approval_id:<18} {a.status.value:<12} {a.risk_level:<6} "
+                            f"{a.action:<32} {a.agent_name}")
+         elif action in ("approve", "reject"):
+-            await svc.engine.approve(approval_id or "", action, decided_by="cli")
++            decision = {"approve": "approved", "reject": "rejected"}[action]
++            await svc.engine.approve(approval_id or "", decision, decided_by="cli")
+             typer.echo(f"{action}d {approval_id}")
+ 
+     _run(_main())
+diff --git a/agentos/integrations/mattermost/client.py b/agentos/integrations/mattermost/client.py
+index 03ac8d9..e41862c 100644
+--- a/agentos/integrations/mattermost/client.py
++++ b/agentos/integrations/mattermost/client.py
+@@ -78,7 +78,7 @@ class MattermostClient:
+ 
+     async def posts_after(self, channel_id: str, since: int) -> list[dict]:
+         resp = await self._get("/api/v4/channels/{}/posts".format(channel_id),
+-                               params={"since": since, "per_page": 200})
++                               params={"since": since * 1000, "per_page": 200})
+         order = resp.get("order", [])
+         posts = resp.get("posts", {})
+         return [posts[pid] for pid in order if pid in posts]
+diff --git a/agentos/integrations/mattermost/service.py b/agentos/integrations/mattermost/service.py
+index a85f20e..17ab3eb 100644
+--- a/agentos/integrations/mattermost/service.py
++++ b/agentos/integrations/mattermost/service.py
+@@ -106,6 +106,14 @@ class MattermostService:
+                     self.team_id, name, name.replace("-", " ").title(), purpose)
+             self.channels[name] = channel["id"]
+ 
++        # register the team's default channels too, so the listener polls them
++        for extra in ("town-square", "general", "off-topic"):
++            if extra in self.channels:
++                continue
++            channel = await self.client.get_channel_by_name(self.team_id, extra)
++            if channel is not None:
++                self.channels[extra] = channel["id"]
++
+     async def ensure_project_channels(self, project_id: str, project_name: str) -> dict[str, str]:
+         """Create per-project channels (projects/<project-id>) if missing."""
+         if not self.available:

@@ -1,0 +1,41 @@
+executive	alex.ceo	Alex	Executive Director	executive
+chief-of-staff	jamie.chief-of-staff	Jamie	Chief of Staff	executive
+product-director	sam.product-director	Sam	Product Director	product
+product-manager	riley.product-manager	Riley	Product Manager	product
+requirements-analyst	quinn	Quinn	Requirements Analyst	product
+product-researcher	avery	Avery	Product Researcher	product
+cto	jordan.cto	Jordan	CTO	engineering
+software-architect	casey	Casey	Software Architect	engineering
+frontend-lead	morgan.frontend-lead	Morgan	Frontend Lead	engineering
+backend-lead	taylor.backend-lead	Taylor	Backend Lead	engineering
+database-engineer	reese	Reese	Database Engineer	engineering
+devops-engineer	rowan.devops-engineer	Rowan	DevOps Engineer	engineering
+ai-engineer	skyler.ai-engineer	Skyler	AI Engineer	engineering
+design-director	dakota.design-director	Dakota	Design Director	design
+ux-designer	emerson.ux-designer	Emerson	UX Designer	design
+ui-designer	finley.ui-designer	Finley	UI Designer	design
+motion-engineer	harper.motion-engineer	Harper	Motion / Creative Engineer	design
+research-director	jules	Jules	Research Director	research
+market-researcher	kai.market-researcher	Kai	Market Researcher	research
+community-researcher	logan	Logan	Community Researcher	research
+competitor-analyst	micah	Micah	Competitor Analyst	research
+technical-researcher	nico	Nico	Technical Researcher	research
+marketing-director	ollie	Ollie	Marketing Director	marketing
+seo-agent	parker.seo-agent	Parker	SEO Agent	marketing
+content-agent	sage.content-agent	Sage	Content Agent	marketing
+social-agent	theo.social-agent	Theo	Social Agent	marketing
+growth-agent	val.growth-agent	Val	Growth Agent	marketing
+sales-director	wren.sales-director	Wren	Sales Director	sales
+lead-researcher	zephyr.lead-researcher	Zephyr	Lead Researcher	sales
+sales-analyst	blake.sales-analyst	Blake	Sales Analyst	sales
+outreach-specialist	drew	Drew	Outreach Specialist	sales
+qa-director	ellis.qa-director	Ellis	QA Director	qa
+test-engineer	frankie.test-engineer	Frankie	Test Engineer	qa
+code-reviewer	gray.code-reviewer	Gray	Code Reviewer	qa
+security-reviewer	hollis	Hollis	Security Reviewer	qa
+performance-reviewer	indigo	Indigo	Performance Reviewer	qa
+operations-director	kit	Kit	Operations Director	operations
+project-manager	lane.project-manager	Lane	Project Manager	operations
+documentation-agent	marlow	Marlow	Documentation Agent	operations
+deployment-agent	nori.deployment-agent	Nori	Deployment Agent	operations
+monitoring-agent	onyx.monitoring-agent	Onyx	Monitoring Agent	operations
