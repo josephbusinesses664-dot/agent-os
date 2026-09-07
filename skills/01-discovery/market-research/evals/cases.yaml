@@ -1,0 +1,34 @@
+description: >
+  Regression cases for the market-research skill. Focus: competitor
+  cross-check, explicit assumption labeling, and evidence confidence.
+  Runs through the existing benchmark runner
+  (`agent-os evaluate skill:market-research`).
+cases:
+  - title: Cross-check competitors before sizing claims
+    description: >
+      Given a market-size estimate sourced from one SEO blog post and
+      conflicting figures from two competitor pricing pages, the artifact
+      must keep both figures, label the blog figure low-confidence, and
+      show the calculation inputs separately from the estimates.
+    agent: market-researcher
+    skill: market-research
+    expected_markers: ["competitor", "confidence"]
+    min_output_len: 150
+    priority: high
+  - title: Label market assumptions explicitly
+    description: >
+      Every sizing input in the TAM/SAM/SOM summary must be labeled
+      observed, calculated, estimated, or assumed. An unlabeled number
+      fails verification.
+    agent: market-researcher
+    skill: market-research
+    expected_markers: ["estimated", "assumed"]
+    min_output_len: 120
+  - title: Segment analysis carries evidence per segment
+    description: >
+      Produce a segment table where each segment row lists the evidence
+      source behind its size and growth claims. A row with no source fails.
+    agent: market-researcher
+    skill: market-research
+    expected_markers: ["segment", "source"]
+    min_output_len: 120

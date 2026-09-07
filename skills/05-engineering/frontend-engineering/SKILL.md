@@ -1,43 +1,127 @@
 ---
 id: frontend-engineering
 name: Frontend Engineering
-description: Production frontend engineering — React/Next/TS, components, state, API integration, performance, a11y, testing.
+description: "Production-grade frontend — typecheck, lint, tests, accessibility, responsive states, performance — verified."
 category: 05-engineering
-version: 1.0.0
-source: agent-os core library (Addy Osmani review methodology adapted)
+version: 1.1.0
+source: agent-os core library
 license: MIT
 capability_type: skill
-required_tools: [filesystem.read, filesystem.write, shell]
-risk_level: low
-cost_level: low
-tags: [frontend, react, engineering]
-compatible_agents: [frontend-lead, ai-engineer]
+required_tools: [repo.search, repo.tree, browser.open, browser.snapshot, browser.evaluate, shell.write]
+risk_level: medium
+cost_level: medium
+dependencies: [ui-design, accessibility, performance-review]
+compatible_agents: [frontend-lead, ui-engineer, react-nextjs]
+tags: [frontend, react, ui, engineering]
+contract:
+  prerequisites:
+    - "design/UX input (or clear requirements)"
+    - "access to the codebase"
+  preferred_agents: [frontend-lead, ui-engineer]
+  preferred_models: []
+  minimum_model_capability: t2
+  expected_cost: medium
+  expected_latency: hours
+  evidence_requirements:
+    - "typecheck/lint/test output recorded"
+    - "browser verification of key states"
+  artifact_contract:
+    - "frontend implementation + verified states + perf notes"
+  quality_gates:
+    - "typecheck passes"
+    - "lint passes"
+    - "tests pass (run, not claimed)"
+    - "accessibility checked (keyboard, contrast, reduced motion)"
+    - "responsive states verified in browser"
+    - "loading/error/empty states present"
+  verification:
+    - "run typecheck/lint/tests; inspect in browser per state"
+  failure_modes:
+    build_failure: "read the error, fix the root cause, rebuild"
+    ui_regression: "check the affected states in the browser"
+  escalation:
+    - "requirements impossible within performance budget"
+  handoff_in:
+    - "design/UX input"
+    - "requirements"
+  handoff_out:
+    - "implementation + test results + perf notes"
+  evaluation:
+    - "real verification results"
+    - "state coverage"
+    - "performance sanity"
+  observability:
+    - "record build/test results and browser checks"
+  related_skills: [ui-design, react-nextjs, accessibility, ui-qa, testing-strategy]
 ---
 
 # Frontend Engineering
 
 ## Purpose
-Build polished, production-quality frontends where design quality is an
-explicit engineering requirement — not an afterthought.
+Build production-quality interfaces verification-first: typecheck, lint,
+tests, accessibility, responsive and interaction states, performance —
+with evidence, not claims.
 
-## Standards
-1. **TypeScript everywhere** — strict mode; typed props/state/API responses;
-   no `any` leaks at boundaries.
-2. **Component architecture** — small focused components; props are the
-   contract; composition over prop-drilling; one job per component.
-3. **State management** — local state by default; server cache (React Query) for
-   async; global store only for true cross-cutting state. No store-by-default.
-4. **API integration** — typed client, error handling on every call, loading +
-   error + empty states rendered, optimistic updates where UX benefits.
-5. **Styling** — token-based (design tokens), responsive by default, no magic
-   pixels; Tailwind or CSS modules per project convention.
-6. **Performance** — code-split routes, lazy-load heavy deps, memoize
-   selectively (profile first), avoid layout thrash, images sized/optimized.
-7. **Accessibility** — semantic HTML, keyboard operable, visible focus,
-   labeled inputs, reduced-motion respected.
-8. **Testing** — unit tests for logic, component tests for behavior, e2e for
-   critical paths. Tests must actually run.
+## When to use / When NOT to use
+- use: any frontend implementation
+- avoid: generic template-looking output; avoid shipping without the
+  verification gates below
 
-## Definition of done
-- Typecheck passes; lint passes; tests pass (evidence).
-- All states implemented; a11y pass; performance budget met.
+## Inputs & assumptions
+- inputs: design/UX input, requirements, codebase
+- assumptions: browser support and device targets assumed unless stated
+
+## Workflow
+1. Explore the codebase; follow existing component/state patterns.
+2. Translate the design into hierarchy, states, responsive behavior.
+3. Implement loading/error/empty states for every data view.
+4. Write tests for the meaningful behavior (not snapshot noise).
+5. Run typecheck, lint, tests — fix until green.
+6. Verify in a real browser: key states, keyboard nav, responsive widths,
+   reduced motion.
+7. Performance sanity: no obvious jank, assets sized, no render leaks.
+8. Hand off with verification evidence.
+
+## Evidence requirements
+- Typecheck/lint/test output recorded in the handoff.
+- Browser checks performed for key states.
+
+## Artifact contract
+- `frontend-implementation`: changed files, test results, browser
+  verification notes, known risks.
+
+## Quality gates (definition of done)
+- [ ] Typecheck passes
+- [ ] Lint passes
+- [ ] Tests pass (executed)
+- [ ] Loading/error/empty states present
+- [ ] Accessibility checks done (keyboard, contrast, reduced motion)
+- [ ] Responsive states verified in browser
+
+## Verification
+- Run the gates; inspect the built UI per state with browser tools.
+
+## Failure & recovery
+| failure | recovery |
+|---|---|
+| build failure | read the error, fix the root cause, rebuild |
+| UI regression | check affected states in browser |
+| perf issue | profile, fix the hotspot, re-measure |
+
+## Escalation
+- Requirements impossible within the performance budget — escalate the
+  trade.
+
+## Handoff
+- receives: design/UX input, requirements
+- passes: implementation, test results, browser verification, perf notes
+
+## Evaluation
+The org evaluates this skill by real verification results, state coverage,
+and performance sanity — a pretty but unverified UI fails.
+
+## Observability
+- Record build/test results and browser checks in the audit trail.
+
+## References
+- references/checklist.md — the frontend verification gate walkthrough

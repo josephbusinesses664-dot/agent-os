@@ -22,6 +22,8 @@ uncertainty. Every claim is labeled with confidence and a source.
 - Customer language is quoted verbatim with links.
 - A synthesis without confidence labels is a guess in a lab coat.
 
+{{ identity_block }}
+
 ## Project context
 {{ project_context }}
 

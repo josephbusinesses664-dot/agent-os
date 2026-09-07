@@ -1,43 +1,115 @@
 ---
 id: ux-design
 name: UX Design
-description: UX design — flows, IA, usability, feedback, error recovery, mobile UX.
+description: "UX design — task flows, states, errors, onboarding — grounded in user jobs and verified by walkthrough."
 category: 04-design
-version: 1.0.0
+version: 1.1.0
 source: agent-os core library
 license: MIT
 capability_type: skill
-required_tools: []
+required_tools: [browser.open, browser.snapshot]
 risk_level: low
 cost_level: low
+dependencies: [product-strategy]
+compatible_agents: [ux-designer, product-manager]
 tags: [ux, flows, usability]
-compatible_agents: [ux-designer, product-manager, design-director]
+contract:
+  prerequisites:
+    - "user jobs and the product intent"
+  preferred_agents: [ux-designer, product-manager]
+  preferred_models: []
+  minimum_model_capability: t2
+  expected_cost: medium
+  expected_latency: hours
+  evidence_requirements:
+    - "flow decisions traceable to user jobs"
+  artifact_contract:
+    - "UX design (task flows, states, error handling, onboarding)"
+  quality_gates:
+    - "each top task has a flow with all states"
+    - "error paths designed, not discovered"
+    - "recovery and cancellation paths present"
+  verification:
+    - "walk each flow end-to-end; test error paths"
+  failure_modes:
+    happy_path_only: "design the error and edge paths explicitly"
+    flow_overload: "split flows at decision points"
+  escalation:
+    - "flows that conflict with technical constraints"
+  handoff_in:
+    - "user jobs"
+    - "product intent"
+  handoff_out:
+    - "UX design (flows, states, errors) to UI design"
+  evaluation:
+    - "flow completeness (all states)"
+    - "error path quality"
+  observability:
+    - "record flow decisions and walkthrough results"
+  related_skills: [ui-design, product-strategy, information-architecture]
 ---
 
 # UX Design
 
 ## Purpose
-Design flows users can complete without instructions: obvious next steps,
-clear feedback, and graceful recovery from errors.
+Design task flows users can complete — including the error, edge and
+recovery paths — grounded in user jobs and verified by walkthrough.
 
-## Method
-1. **User journey** — map entry → first value → habit. Design the whole arc.
-2. **Task flows** — step-by-step for the 3-5 core tasks; count the clicks/steps
-   and minimize.
-3. **Information architecture** — organize by user mental model; label with
-   user language; test findability.
-4. **Feedback** — every action has a visible result within 100ms (optimistic UI)
-   or a clear loading/error state.
-5. **Error recovery** — errors say what happened, why, and how to fix; never
-   dead-end; preserve input.
-6. **Mobile** — thumb zones, 44px targets, no hover dependency, offline states.
+## When to use / When NOT to use
+- use: before UI design, on any multi-step experience
+- avoid: single-action controls (design the interaction directly); avoid
+  designing flows with no user job behind them
 
-## Principles
-- Don't make users remember: show state and choices.
-- Defaults are decisions made for users; choose them carefully.
-- Progressive disclosure for advanced features.
+## Inputs & assumptions
+- inputs: user jobs, product intent
+- assumptions: user skill level and context labeled unless researched
 
-## Rules
-- Test the flow as a fresh user (no institutional knowledge). If you can't
-  complete it without guessing, redesign.
-- Every screen answers: where am I, what can I do, where can I go?
+## Workflow
+1. Restate the user jobs this experience must complete.
+2. For each top task: draw the flow from entry to completion.
+3. Design every state along the way: loading, empty, error, success.
+4. Design the failure paths: validation errors, timeouts, retries,
+   cancellation, recovery.
+5. Onboarding: how a new user reaches first success.
+6. Walk each flow; revise until each job completes.
+
+## Evidence requirements
+- Flow decisions traceable to user jobs; error paths designed, not left to
+  runtime discovery.
+
+## Artifact contract
+- `ux-design`: task flows (all states), error/recovery paths, onboarding,
+  walkthrough results.
+
+## Quality gates (definition of done)
+- [ ] Every top task has a complete flow
+- [ ] Error and recovery paths designed
+- [ ] Walkthroughs passed end-to-end
+- [ ] Cancellation paths present where destructive
+
+## Verification
+- Walk each flow end-to-end in the built interface.
+- Trigger error paths and confirm recovery works.
+
+## Failure & recovery
+| failure | recovery |
+|---|---|
+| happy-path-only design | add error and edge paths explicitly |
+| flow overload | split at decision points |
+| broken recovery | design the recovery step before shipping |
+
+## Escalation
+- Flows conflicting with technical constraints — escalate with both.
+
+## Handoff
+- receives: user jobs, product intent
+- passes: UX design (flows, states, errors) to UI design
+
+## Evaluation
+The org evaluates this skill by flow completeness and error-path quality.
+
+## Observability
+- Record flow decisions and walkthrough results in the project.
+
+## References
+- references/patterns.md — error-state patterns and flow splitting rules

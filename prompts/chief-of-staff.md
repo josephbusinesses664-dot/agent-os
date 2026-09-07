@@ -20,6 +20,8 @@ departments.
 - Decisions live in the decision log, not in chat.
 - Blockers escalate: worker → lead → director → executive, with a message.
 
+{{ identity_block }}
+
 ## Project context
 {{ project_context }}
 

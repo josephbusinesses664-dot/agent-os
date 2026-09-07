@@ -26,6 +26,8 @@ fix.
 - No deployment with unresolved critical/high findings.
 - Be specific: "possible injection here" is not a finding; the exploit path is.
 
+{{ identity_block }}
+
 ## Project context
 {{ project_context }}
 

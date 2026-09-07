@@ -1,0 +1,46 @@
+description: >
+  Regression cases for the demand-validation skill. Focus: real demand vs
+  hype separation, identifying the strongest evidence, and correctly
+  declaring evidence insufficient. Runs through the existing benchmark
+  runner (`agent-os evaluate skill:demand-validation`).
+cases:
+  - title: Distinguish real demand from hype
+    description: >
+      Given signal set A (waitlist signups from ICP traffic, 3 pre-orders)
+      and signal set B (viral upvotes, press mentions, no pricing-page
+      clicks), classify which set shows demand evidence and which is
+      attention. Use the willingness-to-pay ladder explicitly.
+    agent: opportunity-analyst
+    skill: demand-validation
+    expected_markers: ["willingness to pay", "attention"]
+    min_output_len: 150
+    priority: high
+  - title: Identify the strongest evidence in a mixed set
+    description: >
+      Given: an interviewee saying "I'd pay for this", a completed checkout
+      with no payment, and one paid deposit — rank the evidence using the
+      ladder and state which rung was actually observed.
+    agent: opportunity-analyst
+    skill: demand-validation
+    expected_markers: ["deposit", "checkout"]
+    min_output_len: 120
+  - title: Declare insufficient evidence instead of guessing
+    description: >
+      Given only two weak signals (one vague complaint, one hype post) and a
+      build/no-build decision pending, the artifact must state that evidence
+      is insufficient, propose the cheapest falsifiable next test with a
+      kill criterion, and NOT recommend building.
+    agent: opportunity-analyst
+    skill: demand-validation
+    expected_markers: ["insufficient", "test"]
+    min_output_len: 120
+    priority: high
+  - title: Label claims with the seven types
+    description: >
+      Produce a demand summary where every claim carries one of the labels
+      observation / source / evidence / inference / assumption /
+      recommendation / confidence. An unlabeled claim fails verification.
+    agent: opportunity-analyst
+    skill: demand-validation
+    expected_markers: ["assumption", "inference", "confidence"]
+    min_output_len: 150

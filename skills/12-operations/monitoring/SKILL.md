@@ -1,39 +1,111 @@
 ---
 id: monitoring
 name: Monitoring
-description: Health checks, metrics, alerting and observability discipline.
+description: "Signal-first monitoring — what to watch, thresholds, alert coverage, dashboards — with verification."
 category: 12-operations
-version: 1.0.0
+version: 1.1.0
 source: agent-os core library
 license: MIT
 capability_type: skill
-required_tools: [shell]
-risk_level: low
+required_tools: [tool.health]
+risk_level: medium
 cost_level: low
-tags: [monitoring, health, alerts]
-compatible_agents: [monitoring-agent, devops-engineer, operations-director]
+dependencies: [alerting, observability]
+compatible_agents: [monitoring-agent, devops-engineer]
+tags: [monitoring, metrics, health]
+contract:
+  prerequisites:
+    - "the services/behaviors to monitor"
+  preferred_agents: [monitoring-agent]
+  preferred_models: []
+  minimum_model_capability: t1
+  expected_cost: low
+  expected_latency: minutes
+  evidence_requirements:
+    - "alert coverage mapped to the risk surface"
+  artifact_contract:
+    - "monitoring plan (signals, thresholds, alerts, dashboards)"
+  quality_gates:
+    - "signals map to user-visible behavior"
+    - "thresholds set from observed baselines"
+    - "no alert fatigue (actionable alerts only)"
+  verification:
+    - "health checks executed"
+  failure_modes:
+    metric_dump: "each metric must drive an action or a decision"
+    alert_fatigue: "review threshold; silence noise"
+  escalation:
+    - "unmonitored critical paths"
+  handoff_in:
+    - "services/behaviors"
+  handoff_out:
+    - "monitoring plan with alerts"
+  evaluation:
+    - "signal-action mapping"
+    - "alert actionability"
+  observability:
+    - "record health check results"
+  related_skills: [alerting, observability, incident-response]
 ---
 
 # Monitoring
 
 ## Purpose
-Know the system is healthy and know *first* when it isn't — with actionable
-alerts, not noise.
+Decide what to monitor and alert on: signals mapped to user-visible
+behavior, thresholds from observed baselines, and alerts that drive action
+— with health checks actually executed.
 
-## Coverage
-1. **Health checks** — dependency checks (DB, Redis, Mattermost, providers)
-   with status and latency (see `agent-os health`).
-2. **Metrics** — the numbers that matter: task success rate, queue depth,
-   agent failures, model spend, latency, error rate.
-3. **Logs** — structured, searchable, with run/task/project context.
-4. **Alerts** — rule on real symptoms (task failed N times, queue backed up,
-   budget crossed 90%, provider errors); every alert has a runbook.
+## When to use / When NOT to use
+- use: new services, launch readiness, incident follow-ups
+- avoid: metric dumps no one acts on; avoid alert fatigue
 
-## Alert design
-- Alert on symptoms that require action, not on everything.
-- Each alert: name, condition, severity, runbook link, silence policy.
-- No alert fatigue: if an alert fires and nobody acts, fix the alert.
+## Inputs & assumptions
+- inputs: services/behaviors
+- assumptions: baselines assumed until measured — label them
 
-## Rules
-- Dashboards answer questions; metrics without owners drift.
-- Monitor the monitoring: alert failures alert.
+## Workflow
+1. Map the risk surface to signals (user-visible behavior first).
+2. For each signal: metric, threshold (from baseline), alert, owner.
+3. Check alert actionability: every alert implies a response.
+4. Build dashboards for review, not just alerts.
+5. Execute health checks (tool.health); record results.
+
+## Evidence requirements
+- Alert coverage mapped to the risk surface; thresholds baseline-based.
+
+## Artifact contract
+- `monitoring-plan`: signals (metric, threshold, alert, owner), dashboards,
+  health results.
+
+## Quality gates (definition of done)
+- [ ] Signals map to user-visible behavior
+- [ ] Thresholds from observed baselines
+- [ ] No alert fatigue
+- [ ] Health checks executed
+
+## Verification
+- Run health checks and record results.
+
+## Failure & recovery
+| failure | recovery |
+|---|---|
+| metric dump | tie each metric to an action |
+| alert fatigue | raise thresholds; silence noise |
+| unmonitored path | add coverage; escalate if critical |
+
+## Escalation
+- Unmonitored critical paths — escalate with the gap.
+
+## Handoff
+- receives: services/behaviors
+- passes: monitoring plan with alerts
+
+## Evaluation
+The org evaluates this skill by signal-action mapping and alert
+actionability.
+
+## Observability
+- Record health check results in the audit trail.
+
+## References
+- references/patterns.md — signal catalogs per service type

@@ -37,6 +37,9 @@ GENERIC_PROMPT = """You are {{ role }} (agent id: {{ agent_id }}).
 ## Tools available
 {{ tools }}
 
+## Identity (operational)
+{{ identity_block }}
+
 ## Constraints
 - Never claim an action you did not perform. If a tool failed, say so.
 - Prefer cheaper models for routine work; escalate genuinely hard problems.

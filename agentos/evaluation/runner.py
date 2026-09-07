@@ -68,6 +68,11 @@ class BenchmarkRunner:
                 bucket["runs"] += 1
                 bucket["passed"] += int(record.passed)
                 bucket["score"] += record.score
+            if record.skill_id:
+                bucket = summary.by_skill.setdefault(record.skill_id, {"runs": 0, "passed": 0, "score": 0.0})
+                bucket["runs"] += 1
+                bucket["passed"] += int(record.passed)
+                bucket["score"] += record.score
             await self.svc.performance.record_evaluation(record)
         n = max(len(dataset.items), 1)
         summary.avg_score = round(summary.avg_score / n, 2)
@@ -76,6 +81,8 @@ class BenchmarkRunner:
         for bucket in summary.by_agent.values():
             bucket["score"] = round(bucket["score"] / max(bucket["runs"], 1), 2)
         for bucket in summary.by_model.values():
+            bucket["score"] = round(bucket["score"] / max(bucket["runs"], 1), 2)
+        for bucket in summary.by_skill.values():
             bucket["score"] = round(bucket["score"] / max(bucket["runs"], 1), 2)
         summary.ts = datetime.now(timezone.utc)
         await self.svc.entity_store.save("eval_runs", summary)
@@ -124,6 +131,7 @@ class BenchmarkRunner:
         if outcome.model:
             record.model_id = outcome.model
         record.agent_id = agent_id
+        record.skill_id = item.skill
         record.fail_class = outcome.fail_class
         record.task_id = task.task_id
         record.project_id = project.project_id

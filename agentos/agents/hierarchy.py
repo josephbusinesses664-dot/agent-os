@@ -11,6 +11,7 @@ project.state, mcp.call, deploy, github, exec (any tool).
 
 from __future__ import annotations
 
+from agentos.agents.identities import identity_for
 from agentos.domain.models import AgentDef
 
 
@@ -67,6 +68,7 @@ def _agent(
         model_policy={"tier": tier, "preferred_models": [], "max_tier": "t3"},
         permissions=perms,
         risk_level=risk,
+        identity=identity_for(agent_id),
     )
 
 

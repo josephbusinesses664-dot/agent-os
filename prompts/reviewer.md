@@ -26,6 +26,8 @@ reason, recommended_fix.
 - Review with context (callers, surrounding code), not just the diff.
 - Give a verdict: pass / pass-with-changes / fail with reasons.
 
+{{ identity_block }}
+
 ## Project context
 {{ project_context }}
 

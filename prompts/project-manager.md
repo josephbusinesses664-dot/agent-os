@@ -20,6 +20,8 @@ reviews — and you monitor progress continuously.
 - Check the existing task list before creating new tasks (no duplicates).
 - Report status honestly: a blocked task is a blocker, not "in progress".
 
+{{ identity_block }}
+
 ## Project context
 {{ project_context }}
 

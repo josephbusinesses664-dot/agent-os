@@ -158,7 +158,24 @@ async def _h_api_call(ctx: Any, args: dict) -> dict:
 async def _h_mcp_call(ctx: Any, args: dict) -> dict:
     if ctx.services.mcp is None:
         return {"ok": False, "error": "mcp registry not configured"}
-    return await ctx.services.mcp.call_tool(args["server"], args["tool"], args.get("args", {}))
+    return await ctx.services.mcp.call_tool(
+        args["server"], args["tool"], args.get("args", {}),
+        agent_id=ctx.agent.id if ctx.agent is not None else "",
+        task_id=ctx.task.task_id if ctx.task is not None else None,
+        agent_permissions=dict(ctx.agent.permissions) if ctx.agent is not None else None)
+
+
+async def _h_mcp_select(ctx: Any, args: dict) -> dict:
+    """Progressive MCP tool discovery: rank governable candidate tools for a
+    capability need, filtered by trust/permission/health for THIS agent."""
+    if ctx.services.mcp is None:
+        return {"ok": False, "error": "mcp registry not configured"}
+    need = args.get("need", "") or args.get("query", "")
+    if not need:
+        return {"ok": False, "error": "need (capability description) is required"}
+    tools = await ctx.services.mcp.select_tools(
+        need, ctx.agent.id if ctx.agent is not None else "")
+    return {"ok": True, "need": need, "tools": tools, "count": len(tools)}
 
 
 async def _h_repo_search(ctx: Any, args: dict) -> dict:
@@ -552,6 +569,65 @@ async def _h_agent_delegate(ctx: Any, args: dict) -> dict:
             "cost": child_result.cost}
 
 
+async def _h_agent_challenge(ctx: Any, args: dict) -> dict:
+    """Raise a structured disagreement with another agent (identity-driven:
+    claim + evidence + severity + recommended action). Bounded: the
+    recipient or its parent resolves; no infinite debate."""
+    recipient = args.get("agent", "")
+    concern = args.get("concern", "")
+    if not recipient or not concern:
+        return {"ok": False, "error": "agent and concern are required"}
+    severity = args.get("severity", "medium")
+    if severity not in ("low", "medium", "high", "blocking"):
+        return {"ok": False, "error": "severity must be low|medium|high|blocking"}
+    recipient_def = await ctx.agent_registry.get(recipient)
+    if recipient_def is None:
+        return {"ok": False, "error": f"unknown agent {recipient}"}
+    msg = await ctx.services.messages.send_challenge(
+        ctx.agent.id, recipient, concern,
+        evidence=[str(e) for e in args.get("evidence", [])],
+        severity=severity,
+        recommended_action=str(args.get("recommended_action", "")),
+        claim=str(args.get("claim", "")),
+        scope=str(args.get("scope", "")),
+        task_id=ctx.task.task_id if ctx.task else None,
+        project_id=ctx.project.project_id if ctx.project else None)
+    await ctx.event_bus.publish("agent.challenge",
+                                {"from": ctx.agent.id, "to": recipient,
+                                 "severity": severity, "concern": concern[:200],
+                                 "message_id": msg.message_id},
+                                agent_id=ctx.agent.id,
+                                task_id=ctx.task.task_id if ctx.task else None,
+                                project_id=ctx.project.project_id if ctx.project else None,
+                                severity="warning" if severity in ("high", "blocking") else "info")
+    return {"ok": True, "challenge_id": msg.message_id, "recipient": recipient,
+            "note": "the recipient (or its parent) resolves; expect a DECISION message"}
+
+
+async def _h_agent_resolve(ctx: Any, args: dict) -> dict:
+    """Resolve a challenge directed at this agent: accept | reject | escalate.
+    Rejection requires a rationale; escalating passes the decision upward."""
+    challenge_id = args.get("challenge_id", "")
+    verdict = args.get("verdict", "")
+    rationale = str(args.get("rationale", ""))
+    if not challenge_id or verdict not in ("accept", "reject", "escalate"):
+        return {"ok": False, "error": "challenge_id and verdict (accept|reject|escalate) are required"}
+    if verdict == "reject" and not rationale:
+        return {"ok": False, "error": "rejecting a challenge requires a rationale"}
+    try:
+        decision = await ctx.services.messages.resolve_challenge(
+            challenge_id, ctx.agent.id, verdict, rationale=rationale)
+    except (KeyError, ValueError) as exc:
+        return {"ok": False, "error": str(exc)}
+    await ctx.event_bus.publish("agent.challenge_resolved",
+                                {"challenge_id": challenge_id, "verdict": verdict,
+                                 "resolved_by": ctx.agent.id, "rationale": rationale[:200]},
+                                agent_id=ctx.agent.id,
+                                task_id=ctx.task.task_id if ctx.task else None,
+                                project_id=ctx.project.project_id if ctx.project else None)
+    return {"ok": True, "verdict": verdict, "decision_message": decision.message_id}
+
+
 BUILTIN_TOOLS: list[ToolDef] = [
     ToolDef(name="filesystem.read", description="Read a file or list a directory inside the project workspace.",
             permission_key="filesystem.read", risk_level="low"),
@@ -573,8 +649,10 @@ BUILTIN_TOOLS: list[ToolDef] = [
             permission_key="mattermost.post", risk_level="low"),
     ToolDef(name="api.call", description="Call a registered API from the API catalog (rate-limited, logged).",
             permission_key="api.call", risk_level="medium"),
-    ToolDef(name="mcp.call", description="Call a tool on a configured MCP server.",
+    ToolDef(name="mcp.call", description="Call a tool on a governed MCP server (trust/permission/health gated, injection-scanned).",
             permission_key="mcp.call", risk_level="medium"),
+    ToolDef(name="mcp.select", description="Rank available MCP tools for a capability need (trust-, permission- and health-aware).",
+            permission_key="mcp.call", risk_level="low"),
     ToolDef(name="repo.search", description="Search file contents under the project workspace.",
             permission_key="repo.search", risk_level="low", category="capability"),
     ToolDef(name="repo.tree", description="List the project workspace file tree.",
@@ -595,6 +673,10 @@ BUILTIN_TOOLS: list[ToolDef] = [
             permission_key="tool.health", risk_level="low", category="system"),
     ToolDef(name="agent.delegate", description="Delegate a bounded subtask to a child agent (depth/parallel/budget limited).",
             permission_key="agent.delegate", risk_level="medium", category="system"),
+    ToolDef(name="agent.challenge", description="Raise a structured disagreement with another agent: claim + evidence + severity + recommended action.",
+            permission_key="mattermost.post", risk_level="low", category="system"),
+    ToolDef(name="agent.resolve", description="Resolve a challenge you received: accept | reject (rationale required) | escalate.",
+            permission_key="mattermost.post", risk_level="low", category="system"),
     ToolDef(name="browser.open", description="Open a URL in the agent's isolated browser session (http/https/file/data).",
             permission_key="browser.open", risk_level="low", category="browser"),
     ToolDef(name="browser.snapshot", description="Read the current page: headings, links, buttons, inputs and visible text.",
@@ -629,6 +711,7 @@ HANDLERS: dict[str, ToolHandler] = {
     "mattermost.post": _h_mattermost_post,
     "api.call": _h_api_call,
     "mcp.call": _h_mcp_call,
+    "mcp.select": _h_mcp_select,
     "repo.search": _h_repo_search,
     "repo.tree": _h_repo_tree,
     "db.query": _h_db_query,
@@ -639,6 +722,8 @@ HANDLERS: dict[str, ToolHandler] = {
     "tool.discover": _h_tool_discover,
     "tool.health": _h_tool_health,
     "agent.delegate": _h_agent_delegate,
+    "agent.challenge": _h_agent_challenge,
+    "agent.resolve": _h_agent_resolve,
     "browser.open": _h_browser_open,
     "browser.snapshot": _h_browser_snapshot,
     "browser.click": _h_browser_click,

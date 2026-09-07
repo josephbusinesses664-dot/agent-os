@@ -191,10 +191,10 @@ def agents(
 # ---------------------------------------------------------------------------
 
 @app.command()
-def skills(action: str = typer.Argument(..., help="list | enable | disable | search"),
+def skills(action: str = typer.Argument(..., help="list | audit | show | enable | disable | search | refs"),
            query: Optional[str] = typer.Argument(None),
            category: Optional[str] = typer.Option(None, "--category")):
-    """Manage skills (list | enable | disable | search)."""
+    """Manage skills (list | audit | show | enable | disable | search | refs)."""
     async def _main():
         svc = await _load_svc()
         if action == "list":
@@ -205,6 +205,68 @@ def skills(action: str = typer.Argument(..., help="list | enable | disable | sea
         elif action == "search":
             for s in await svc.skill_registry.search(query or "", limit=15):
                 typer.echo(f"  {s.id:<32} {s.name}  ({s.category})")
+        elif action == "audit":
+            from agentos.domain.models import SkillContract
+
+            def has_contract(s) -> bool:
+                return s.contract.model_dump() != SkillContract().model_dump()
+
+            rows = await svc.skill_registry.list()
+            total = len(rows)
+            with_contract = sum(1 for s in rows if has_contract(s))
+            with_tools = sum(1 for s in rows if s.tools)
+            with_refs = sum(1 for s in rows if s.references)
+            with_evals = 0
+            for s in rows:
+                if await svc.skill_registry.load_evals(s.id):
+                    with_evals += 1
+            verified = sum(1 for s in rows if s.contract.verification or s.contract.quality_gates)
+            recovery = sum(1 for s in rows if s.contract.failure_modes)
+            typer.echo(f"{'ID':<32} {'DEPT':<24} {'L':<4} {'CTX':<4} {'TLS':<4} {'REF':<4} "
+                       f"{'EVL':<4} {'VER':<4} {'REC':<4} {'RISK':<8} NAME")
+            typer.echo("-" * 120)
+            for s in rows:
+                path = s.source_path or ""
+                lines = 0
+                if path:
+                    try:
+                        lines = sum(1 for _ in open(path, errors="replace"))
+                    except OSError:
+                        pass
+                evals = "y" if await svc.skill_registry.load_evals(s.id) else "-"
+                typer.echo(f"{s.id:<32} {s.category:<24} {lines:<4} "
+                           f"{'y' if has_contract(s) else '-':<4} "
+                           f"{len(s.tools) or '-':<4} {len(s.references) or '-':<4} "
+                           f"{evals:<4} {'y' if s.contract.verification or s.contract.quality_gates else '-':<4} "
+                           f"{'y' if s.contract.failure_modes else '-':<4} {s.risk_level:<8} {s.name}")
+            typer.echo("-" * 120)
+            typer.echo(f"TOTAL {total} | contract {with_contract} | tools {with_tools} | "
+                       f"references {with_refs} | evals {with_evals} | "
+                       f"verification {verified} | recovery {recovery}")
+        elif action == "show":
+            s = await svc.skill_registry.get(query or "")
+            if not s:
+                typer.echo(f"skill {query} not found")
+                return
+            typer.echo(json.dumps({
+                "id": s.id, "name": s.name, "category": s.category,
+                "version": s.version, "risk_level": s.risk_level,
+                "cost_level": s.cost_level, "tags": s.tags,
+                "required_tools": s.required_tools,
+                "compatible_agents": s.compatible_agents,
+                "dependencies": s.dependencies,
+                "contract": s.contract.model_dump(),
+                "tools": [t.name for t in s.tools],
+                "references": s.references,
+                "source": s.source_path,
+            }, indent=2))
+        elif action == "refs":
+            refs = await svc.skill_registry.list_references(query or "")
+            if not refs:
+                typer.echo(f"no references for {query}")
+                return
+            for name in refs:
+                typer.echo(f"  {name}")
         elif action in ("enable", "disable"):
             await svc.skill_registry.enable(query or "", enabled=(action == "enable"))
             typer.echo(f"{action}d {query}")
@@ -433,10 +495,12 @@ def memory(limit: int = typer.Option(30, "--limit")):
 # ---------------------------------------------------------------------------
 
 @app.command()
-def evaluate(dataset: str = typer.Argument("basic", help="Dataset name (eval_sets/<name>.jsonl)"),
+def evaluate(dataset: str = typer.Argument("basic",
+             help="Dataset name: eval_sets/<name>.jsonl OR a skill id with evals/cases.yaml"),
              agent: Optional[str] = typer.Option(None, "--agent", help="Override assigned agent"),
              json_output: bool = typer.Option(False, "--json")):
-    """Run a benchmark over a regression dataset through the real engine path."""
+    """Run a benchmark over a regression dataset (or a skill's eval cases)
+    through the real engine path."""
     async def _main():
         svc = await _load_svc()
         summary = await svc.evaluation.run_dataset(dataset, agent_override=agent)

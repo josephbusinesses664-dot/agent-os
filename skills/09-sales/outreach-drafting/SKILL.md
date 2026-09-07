@@ -1,41 +1,117 @@
 ---
 id: outreach-drafting
 name: Outreach Drafting
-description: Draft personalized, honest outreach grounded in prospect research.
+description: "Personalized outreach from prospect evidence — relevance, proof, one ask — approval-gated before sending."
 category: 09-sales
-version: 1.0.0
+version: 1.1.0
 source: agent-os core library
 license: MIT
 capability_type: skill
-required_tools: []
-risk_level: low
+required_tools: [web.search]
+risk_level: high
 cost_level: low
-tags: [outreach, sales, email]
-compatible_agents: [outreach-specialist, sales-director]
+dependencies: [prospect-analysis]
+compatible_agents: [outreach-specialist, sales-analyst]
+tags: [outreach, sales, messaging]
+contract:
+  prerequisites:
+    - "prospect analysis with evidence"
+    - "approval before any sending"
+  preferred_agents: [outreach-specialist]
+  preferred_models: []
+  minimum_model_capability: t2
+  expected_cost: low
+  expected_latency: minutes
+  evidence_requirements:
+    - "personalization grounded in the prospect analysis"
+    - "claims about the prospect true and verified"
+  artifact_contract:
+    - "outreach message (personalization, proof, ask) + approval status"
+  quality_gates:
+    - "message references evidence specific to the prospect"
+    - "one clear ask"
+    - "no fabricated prospect facts"
+    - "approval gate: sending external messages requires human approval"
+  verification:
+    - "re-check every prospect claim against the analysis"
+  failure_modes:
+    template_flood: "personalize from evidence or do not send"
+    fabricated_claim: "remove; verify every claim"
+  escalation:
+    - "outreach to regulated/high-visibility contacts"
+  handoff_in:
+    - "prospect analysis"
+  handoff_out:
+    - "outreach message with approval request"
+  evaluation:
+    - "personalization quality"
+    - "claim accuracy"
+  observability:
+    - "record the message and approval status"
+  related_skills: [prospect-analysis, copywriting, sales-strategy]
 ---
 
 # Outreach Drafting
 
 ## Purpose
-Write outreach that earns a reply: short, specific, relevant — and always
-reviewed before any send.
+Draft personalized outreach from prospect evidence: specific relevance,
+proof, one clear ask — and require human approval before any sending.
 
-## Structure (3-5 sentences)
-1. **Context** — why now/why them (their recent signal, cited).
-2. **Hook** — one specific observation about their situation.
-3. **Offer** — the one thing you can help with, in their terms.
-4. **Ask** — a tiny next step (15-min call, reply to this, one question).
-5. **Out** — no pressure, easy to ignore.
+## When to use / When NOT to use
+- use: any external outreach
+- avoid: template floods; avoid any sending without approval — this is a
+  high-risk, approval-gated action
 
-## Rules
-- No templates with {placeholder} fields that leak; personalization must be
-  real and fact-based.
-- Never fabricate familiarity ("loved your post" when you haven't read it).
-- Honest claims about the product only.
-- Subject line: specific, not clickbaity.
-- External sends require human approval through the approval system — a draft
-  is a draft until approved.
+## Inputs & assumptions
+- inputs: prospect analysis
+- assumptions: claims about the prospect come from the analysis — verify
+  before use
 
-## Draft review checklist
-- Does it pass the 5-second scan? Is the ask obvious?
-- Would I reply to this? (If no, rewrite.)
+## Workflow
+1. Read the prospect analysis; pick the strongest evidence-backed pain and
+   trigger.
+2. Draft: opening referencing the specific evidence → relevance → proof →
+   one ask.
+3. Verify every prospect claim against the analysis; remove anything not
+   evidenced.
+4. Short, skimmable, one CTA.
+5. Submit for human approval (sending external messages is gated).
+
+## Evidence requirements
+- Personalization grounded in evidence; zero fabricated prospect facts.
+
+## Artifact contract
+- `outreach-message`: message, evidence references, ask, approval status.
+
+## Quality gates (definition of done)
+- [ ] Personalization evidence-specific
+- [ ] One clear ask
+- [ ] No fabricated claims
+- [ ] Approval obtained before sending
+
+## Verification
+- Check every prospect claim against the analysis.
+
+## Failure & recovery
+| failure | recovery |
+|---|---|
+| template flood | personalize or do not send |
+| fabricated claim | remove and verify |
+| approval pending | do not send; wait for decision |
+
+## Escalation
+- Outreach to regulated/high-visibility contacts — escalate for review.
+
+## Handoff
+- receives: prospect analysis
+- passes: outreach message with an approval request
+
+## Evaluation
+The org evaluates this skill by personalization quality and claim
+accuracy — and by never sending without approval.
+
+## Observability
+- Record the message and approval status in the audit trail.
+
+## References
+- references/patterns.md — personalization and ask patterns

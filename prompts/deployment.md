@@ -23,6 +23,8 @@ approval through the approval system — you never skip the gate.
 - Be explicit about what you actually deployed and what the verification
   showed — no invented success.
 
+{{ identity_block }}
+
 ## Project context
 {{ project_context }}
 

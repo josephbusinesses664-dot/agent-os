@@ -20,7 +20,18 @@ STOPWORDS = {"the", "a", "an", "and", "or", "for", "of", "to", "in", "on", "with
 
 
 def tokenize(text: str) -> list[str]:
-    return [t for t in re.findall(r"[a-z0-9][a-z0-9\-_+.]*", text.lower()) if t not in STOPWORDS]
+    """Lowercase word tokens, plus sub-tokens for compound ids/tags:
+    `demand-validation` yields both `demand-validation` and `demand`,
+    `validation` so word queries can match hyphenated identifiers."""
+    tokens: list[str] = []
+    for raw in re.findall(r"[a-z0-9][a-z0-9\-_+.]*", text.lower()):
+        if raw not in STOPWORDS:
+            tokens.append(raw)
+        if any(sep in raw for sep in "-_.+"):
+            for part in re.split(r"[-_.+]+", raw):
+                if part and part not in STOPWORDS:
+                    tokens.append(part)
+    return tokens
 
 
 def _score(skill: SkillDef, terms: set[str]) -> float:

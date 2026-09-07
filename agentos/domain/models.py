@@ -25,6 +25,32 @@ def new_id(prefix: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Agent identity (structured cognitive layer)
+# ---------------------------------------------------------------------------
+
+class AgentIdentity(BaseModel):
+    """Structured cognitive identity for one agent. Operated by
+    agentos.agents.identity (archetypes, prompt rendering) and the runtime.
+    Identity shapes judgment; it never grants permissions."""
+
+    archetype: str = "engineer"  # executive/architect/researcher/product/
+    #                              designer/engineer/qa/security/operations/
+    #                              sales/marketing
+    mission: str = ""            # one sentence: what this agent is FOR
+    priorities: list[str] = Field(default_factory=list)  # ranked, first = highest
+    decision_framework: list[str] = Field(default_factory=list)  # ordered questions
+    risk_tolerance: str = "moderate"  # minimal | low | moderate | high
+    autonomy: str = "L2"             # L0..L5 (see agents/identity.py)
+    evidence_standard: str = ""      # what counts as proof for this role
+    quality_standard: str = ""       # the bar the agent holds work to
+    anti_patterns: list[str] = Field(default_factory=list)  # behaviors to refuse
+    communication_style: str = ""
+    disagreement_style: str = ""
+    escalation_policy: str = ""
+    failure_behavior: str = ""
+
+
+# ---------------------------------------------------------------------------
 # Agents
 # ---------------------------------------------------------------------------
 
@@ -60,6 +86,10 @@ class AgentDef(BaseModel):
     permissions: dict[str, str] = Field(default_factory=dict)  # tool -> allow|deny
     memory_scope: str = "agent"  # agent | project | org
     risk_level: str = "low"  # low | medium | high
+    # Structured identity: archetype, priorities, decision framework, risk
+    # tolerance, autonomy, comms/disagreement style. See agents/identity.py.
+    # Optional so persisted pre-upgrade agents still load.
+    identity: Optional[AgentIdentity] = None
     version: int = 1
     enabled: bool = True
     created_at: datetime = Field(default_factory=utcnow)
@@ -172,6 +202,34 @@ class Project(BaseModel):
 # Skills
 # ---------------------------------------------------------------------------
 
+class SkillContract(BaseModel):
+    """Machine-readable operational contract for a skill (the skill-system
+    upgrade's Phase-2 contract). The registry, planner and evaluator can read
+    these fields; the skill body carries the human-readable operating
+    procedure. All fields optional — a knowledge-only skill may carry only
+    prerequisites and references.
+    """
+
+    prerequisites: list[str] = Field(default_factory=list)
+    required_capabilities: list[str] = Field(default_factory=list)  # capability/tool-group ids
+    preferred_agents: list[str] = Field(default_factory=list)
+    preferred_models: list[str] = Field(default_factory=list)
+    minimum_model_capability: str = ""  # t0 | t1 | t2 | t3
+    expected_cost: str = ""  # low | medium | high
+    expected_latency: str = ""  # e.g. "minutes" | "hours"
+    evidence_requirements: list[str] = Field(default_factory=list)
+    artifact_contract: list[str] = Field(default_factory=list)  # artifacts produced
+    quality_gates: list[str] = Field(default_factory=list)  # definition of done
+    verification: list[str] = Field(default_factory=list)  # how artifacts are verified
+    failure_modes: dict[str, str] = Field(default_factory=dict)  # failure -> recovery strategy
+    escalation: list[str] = Field(default_factory=list)  # when to escalate to a human/parent
+    handoff_in: list[str] = Field(default_factory=list)  # fields expected from predecessor
+    handoff_out: list[str] = Field(default_factory=list)  # fields passed to the next skill
+    evaluation: list[str] = Field(default_factory=list)  # how Agent OS measures this skill
+    observability: list[str] = Field(default_factory=list)  # what to record in traces/audit
+    related_skills: list[str] = Field(default_factory=list)
+
+
 class SkillDef(BaseModel):
     id: str
     name: str
@@ -191,6 +249,11 @@ class SkillDef(BaseModel):
     enabled: bool = True
     body: str = ""  # full markdown body (loaded lazily where practical)
     source_path: str = ""
+    # --- skill contract (machine-readable operational metadata) -----------
+    contract: SkillContract = Field(default_factory=SkillContract)
+    # reference filenames under <skill_dir>/references/ for progressive
+    # disclosure — loaded on demand, never into the base context
+    references: list[str] = Field(default_factory=list)
     # --- executable capability layer -------------------------------------
     # A skill can be more than a prompt: attach executable tools, hooks,
     # validators, model settings, permissions, examples and tests.
@@ -232,6 +295,15 @@ class McpServer(BaseModel):
     # itself is redacted from serialized output; prefer set_credentials()
     auth: dict[str, Any] = Field(default_factory=dict)
     enabled: bool = True
+    # -- governance (MCP upgrade): provenance & trust ------------------------
+    trust: str = "untrusted"  # trusted | reviewed | untrusted | blocked
+    owner: str = ""  # provenance: who maintains this server ("" = unknown)
+    server_version: str = ""  # as reported by the server; never invented
+    allowed_agents: list[str] = Field(default_factory=list)  # empty = all authorized
+    tool_trust: dict[str, str] = Field(default_factory=dict)  # tool -> trust override
+    data_sensitivity: str = "normal"  # normal | sensitive | restricted
+    # -- health / circuit breaker -------------------------------------------
+    rate_limit_per_min: Optional[int] = None  # unknown stays None
 
     def public_dict(self) -> dict[str, Any]:
         """Serialize without credential material."""
@@ -240,6 +312,16 @@ class McpServer(BaseModel):
             d["auth"] = {"type": self.auth.get("type", "configured"),
                           "token": "<redacted>" if self.auth.get("token") else None}
         return d
+
+
+class McpTrustLevel(str, Enum):
+    """Trust ladder for MCP servers/tools. Trust influences discovery,
+    recommendation and approval — it never bypasses permissions."""
+
+    TRUSTED = "trusted"      # official / internal / verified
+    REVIEWED = "reviewed"    # externally maintained, inspected
+    UNTRUSTED = "untrusted"  # unknown provenance
+    BLOCKED = "blocked"      # explicitly prohibited
 
 
 # ---------------------------------------------------------------------------
@@ -705,6 +787,27 @@ class EvaluationRecord(BaseModel):
         return d
 
 
+class SkillPerformance(BaseModel):
+    """Per-skill performance aggregation (one more view over the same
+    EvaluationRecords — not a second evaluation system). Tracks how often a
+    skill is used and how well it performs per agent and per model, so the
+    organization can learn "agent A + model X is unusually good at this
+    skill". Only real evaluation observations are folded in; nothing fake.
+    """
+
+    skill_id: str
+    runs: int = 0
+    passed: int = 0
+    pass_rate: float = 0.0
+    avg_score: float = 0.0
+    total_cost: float = 0.0
+    avg_latency_ms: float = 0.0
+    total_retries: int = 0
+    by_agent: dict[str, dict[str, float]] = Field(default_factory=dict)
+    by_model: dict[str, dict[str, float]] = Field(default_factory=dict)
+    updated_at: datetime = Field(default_factory=utcnow)
+
+
 class EvaluationRunSummary(BaseModel):
     """Result of one benchmark/regression run over a dataset."""
 
@@ -718,4 +821,5 @@ class EvaluationRunSummary(BaseModel):
     avg_latency_ms: float = 0.0
     by_agent: dict[str, dict[str, float]] = Field(default_factory=dict)
     by_model: dict[str, dict[str, float]] = Field(default_factory=dict)
+    by_skill: dict[str, dict[str, float]] = Field(default_factory=dict)
     by_fail_class: dict[str, int] = Field(default_factory=dict)

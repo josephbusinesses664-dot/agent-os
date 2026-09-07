@@ -1,36 +1,112 @@
 ---
 id: sales-analysis
 name: Sales Analysis
-description: Quantitative sales analysis — metrics, cohorts, unit economics.
+description: "Sales performance analysis — conversion, win/loss, cohort, CAC — with computed evidence."
 category: 09-sales
-version: 1.0.0
+version: 1.1.0
 source: agent-os core library
 license: MIT
 capability_type: skill
-required_tools: []
+required_tools: [db.query]
 risk_level: low
 cost_level: low
-tags: [sales, analysis, metrics]
+dependencies: [pipeline-analysis]
 compatible_agents: [sales-analyst]
+tags: [sales, analysis, metrics]
+contract:
+  prerequisites:
+    - "sales data (deals, stages, outcomes)"
+  preferred_agents: [sales-analyst]
+  preferred_models: []
+  minimum_model_capability: t1
+  expected_cost: low
+  expected_latency: minutes
+  evidence_requirements:
+    - "every metric computed and recorded with data vintage"
+  artifact_contract:
+    - "sales analysis (metrics, win/loss, cohorts, recommendations)"
+  quality_gates:
+    - "win/loss reasons sourced from data"
+    - "CAC/payback computed, not assumed"
+    - "recommendations tied to computed findings"
+  verification:
+    - "recompute the headline metrics"
+  failure_modes:
+    cherry_pick: "report the full distribution, not just the flattering slice"
+    no_cause: "correlate, then propose a test"
+  escalation:
+    - "deteriorating unit economics"
+  handoff_in:
+    - "sales data"
+  handoff_out:
+    - "sales analysis with recommendations"
+  evaluation:
+    - "metric correctness"
+    - "recommendation grounding"
+  observability:
+    - "record metrics and vintage"
+  related_skills: [pipeline-analysis, sales-strategy, analytics]
 ---
 
 # Sales Analysis
 
 ## Purpose
-Turn sales data into decisions: what's working, what's leaking, what to do.
+Analyze sales performance with computed evidence: conversion, win/loss,
+cohorts, CAC — and recommendations grounded in the numbers.
 
-## Core metrics
-- Conversion by stage/source; CAC and payback; LTV (by cohort, not blended);
-- win rate by segment/channel; ACV trends; churn & net retention;
-- sales cycle length; activity ratios (touches → meetings → proposals).
+## When to use / When NOT to use
+- use: performance reviews, unit-economics checks
+- avoid: reporting without computing; avoid cherry-picking flattering
+  slices
 
-## Method
-1. Define the question; pick the metric that answers it.
-2. Segment: by channel, segment, rep, month — the blend hides everything.
-3. Cohort analysis for retention/LTV: same-month groups compared over time.
-4. Compare against targets and trend; isolate the change that moved the number.
-5. Recommend actions with owners; follow up on outcomes.
+## Inputs & assumptions
+- inputs: sales data
+- assumptions: data vintage and definitions recorded
 
-## Rules
-- Show the numbers and the math; no vibes.
-- Distinguish correlation from cause; propose experiments to confirm.
+## Workflow
+1. Load the data; define each metric before computing.
+2. Compute: conversion per stage, win/loss by reason (from deal notes),
+   cohort retention, CAC and payback.
+3. Report distributions, not just averages.
+4. Correlate causes; propose tests for causality.
+5. Produce recommendations tied to findings.
+
+## Evidence requirements
+- Every metric computed with data vintage; win/loss reasons sourced.
+
+## Artifact contract
+- `sales-analysis`: metrics, win/loss table, cohort view, CAC/payback,
+  recommendations.
+
+## Quality gates (definition of done)
+- [ ] Metrics computed from data
+- [ ] Win/loss reasons sourced
+- [ ] CAC/payback computed
+- [ ] Recommendations tied to findings
+
+## Verification
+- Recompute the headline metrics.
+
+## Failure & recovery
+| failure | recovery |
+|---|---|
+| cherry-pick | report the full distribution |
+| correlation as cause | propose a test |
+| sparse data | label sparsity; widen the window |
+
+## Escalation
+- Deteriorating unit economics — escalate with the numbers.
+
+## Handoff
+- receives: sales data
+- passes: sales analysis with recommendations
+
+## Evaluation
+The org evaluates this skill by metric correctness and recommendation
+grounding.
+
+## Observability
+- Record metrics and vintage in the audit trail.
+
+## References
+- references/patterns.md — cohort and unit-economics methods

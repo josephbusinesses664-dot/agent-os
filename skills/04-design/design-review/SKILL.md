@@ -1,47 +1,113 @@
 ---
 id: design-review
 name: Design Review
-description: Structured critique of designs and interfaces against the quality bar.
+description: "Structured design critique — against goals and principles, severity-ranked, with concrete fixes."
 category: 04-design
-version: 1.0.0
+version: 1.1.0
 source: agent-os core library
 license: MIT
 capability_type: skill
-required_tools: []
+required_tools: [browser.open, browser.snapshot]
 risk_level: low
 cost_level: low
+dependencies: [design-quality, ux-design]
+compatible_agents: [design-director, ui-designer, frontend-lead]
 tags: [design, review, critique]
-compatible_agents: [design-director, qa-director]
+contract:
+  prerequisites:
+    - "design or built interface"
+    - "the goals it must achieve"
+  preferred_agents: [design-director, ui-designer]
+  preferred_models: []
+  minimum_model_capability: t2
+  expected_cost: low
+  expected_latency: minutes
+  evidence_requirements:
+    - "findings tied to goals or principles with locations"
+  artifact_contract:
+    - "design review (findings ranked by severity, fixes)"
+  quality_gates:
+    - "reviewed against goals, not in a vacuum"
+    - "findings severity-ranked"
+  verification:
+    - "verify each finding in the actual interface"
+  failure_modes:
+    vague_feedback: "re-anchor each point to a goal or principle"
+    goal_unknown: "ask for the goals before reviewing"
+  escalation:
+    - "goal-blocking issues"
+  handoff_in:
+    - "design"
+    - "goals"
+  handoff_out:
+    - "design review with ranked findings and fixes"
+  evaluation:
+    - "goal-anchored critique"
+    - "actionable fixes"
+  observability:
+    - "record the review outcome"
+  related_skills: [design-quality, ux-design, ui-design]
 ---
 
 # Design Review
 
 ## Purpose
-Review a design or shipped UI against explicit criteria and produce findings
-ranked by severity — the design analogue of code review.
+Critique a design against its goals — not in a vacuum — producing
+severity-ranked, actionable findings.
 
-## Review dimensions
-1. **Hierarchy** — does the primary action/信息 read first?
-2. **Consistency** — tokens, components, spacing, radii used consistently?
-3. **Typography** — scale, contrast, measure, line-height sane?
-4. **States & feedback** — all interactive states present; errors recoverable?
-5. **Accessibility** — keyboard, contrast, labels, reduced motion?
-6. **Responsive** — mobile/tablet/desktop; no overflow, no hover-dependency?
-7. **Performance & motion** — animations purposeful, bounded, GPU-cheap;
-   no gratuitous effects?
-8. **Copy** — concise, specific, action-oriented?
+## When to use / When NOT to use
+- use: before design sign-off, when a designer asks for review
+- avoid: without knowing the goals (ask first); avoid rubber-stamp reviews
 
-## Finding format
-```
-severity: critical | major | minor | nit
-element: <where>
-problem: <what is wrong>
-why: <impact on user>
-fix: <concrete recommendation>
-```
+## Inputs & assumptions
+- inputs: design or built interface, goals
+- assumptions: goals are the review contract — restate them so the review
+  is judged against them
 
-## Rules
-- Judge against the checklist, not taste. If it's taste, say so explicitly.
-- "Looks generic/template-like" must come with a concrete cause (stock layout,
-  default colors, missing states).
-- Approve only when critical/major findings are resolved.
+## Workflow
+1. Restate the goals the design must achieve.
+2. Walk the design against goals: does it accomplish each?
+3. Walk the quality dimensions (see design-quality): hierarchy, spacing,
+   typography, color, motion, states.
+4. Record findings as (element, goal/principle violated, severity, fix).
+5. Rank by severity: critical (blocks a goal) / major / minor.
+6. Produce the review.
+
+## Evidence requirements
+- Every finding names the element, the goal/principle, and a concrete fix.
+
+## Artifact contract
+- `design-review`: goals restated, findings ranked (severity, element,
+  principle, fix), verdict.
+
+## Quality gates (definition of done)
+- [ ] Goals restated
+- [ ] Findings severity-ranked
+- [ ] Every finding actionable
+- [ ] Verified against the actual interface
+
+## Verification
+- Confirm each finding in the real interface (browser).
+
+## Failure & recovery
+| failure | recovery |
+|---|---|
+| vague feedback | re-anchor to goal or principle |
+| unknown goals | ask before reviewing |
+| conflicting goals | surface the conflict to the decision-maker |
+
+## Escalation
+- Goal-blocking issues — escalate with the finding and fix.
+
+## Handoff
+- receives: design, goals
+- passes: design review with ranked findings and fixes
+
+## Evaluation
+The org evaluates this skill by goal-anchored critique and actionable fixes.
+
+## Observability
+- Record the review verdict and findings in the project audit trail.
+
+## References
+- references/checklist.md — review walkthrough by quality dimension

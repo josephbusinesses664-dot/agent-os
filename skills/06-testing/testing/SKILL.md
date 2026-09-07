@@ -1,44 +1,108 @@
 ---
 id: testing
-name: Testing
-description: Write and RUN unit and integration tests. Evidence over claims.
+name: Testing Discipline
+description: "The testing discipline — execute, don't claim — with failure injection and regression coverage."
 category: 06-testing
-version: 1.0.0
-source: agent-os core library (Superpowers testing methodology)
+version: 1.1.0
+source: agent-os core library
 license: MIT
 capability_type: skill
-required_tools: [filesystem.read, filesystem.write, shell]
+required_tools: [shell.write, repo.search]
 risk_level: low
 cost_level: low
-tags: [testing, unit, integration]
-compatible_agents: [test-engineer, qa-director]
+dependencies: [testing-strategy, test-automation]
+compatible_agents: [test-engineer]
+tags: [testing, verification]
+contract:
+  prerequisites:
+    - "behavior to verify"
+  preferred_agents: [test-engineer]
+  preferred_models: []
+  minimum_model_capability: t1
+  expected_cost: low
+  expected_latency: minutes
+  evidence_requirements:
+    - "test executions recorded with outcomes"
+  artifact_contract:
+    - "test report (cases, outcomes, coverage notes)"
+  quality_gates:
+    - "tests executed, not asserted"
+    - "negative and edge cases included"
+    - "regression set maintained"
+  verification:
+    - "run and record; rerun after fixes"
+  failure_modes:
+    claim_only: "execute — 'should work' is not a test result"
+    happy_path_only: "add negative and edge cases"
+  escalation:
+    - "failures that block the deliverable"
+  handoff_in:
+    - "behavior"
+  handoff_out:
+    - "test report with executed outcomes"
+  evaluation:
+    - "execution evidence"
+    - "edge coverage"
+  observability:
+    - "record test outcomes"
+  related_skills: [test-automation, testing-strategy, e2e-testing]
 ---
 
-# Testing
+# Testing Discipline
 
 ## Purpose
-Prove behavior with executed tests. "It should work" is not a test result —
-the test run output is the evidence.
+The core discipline: tests are executed and recorded, never claimed.
+Include negative and edge cases; keep a regression set.
 
-## Pyramid
-1. **Unit** — pure logic, fast, no I/O. Cover edge cases and error paths.
-2. **Integration** — real components (DB, cache, HTTP clients) with test
-   doubles only at true boundaries.
-3. **E2E** — critical user paths through the real system.
+## When to use / When NOT to use
+- use: whenever a deliverable claims to work
+- avoid: reporting "should work" as a result — run it
 
-## Writing rules
-- One behavior per test; name = the behavior ("returns 404 for unknown id").
-- Arrange-Act-Assert structure; assert on outcomes, not implementation.
-- No sleeps: wait on conditions; no order dependence between tests.
-- Test the failure paths — errors, timeouts, denied permissions — not just happy path.
-- Fixtures minimal and explicit.
+## Inputs & assumptions
+- inputs: behavior to verify
+- assumptions: environment state recorded so results are reproducible
 
-## Running
-- Run the actual test command and capture output: pass/fail counts and
-  failures verbatim.
-- Report: `N passed, M failed` with failure details. Never report "tests
-  passed" without the run.
+## Workflow
+1. Identify the behavior and its risky edges.
+2. Write/select tests: happy path + negative + edge cases.
+3. Execute; record outcomes per case.
+4. Fix failures, re-run, record.
+5. Update the regression set with any newly found bugs.
 
-## Rules
-- A bug that has no test will return: add a regression test with the fix.
-- Coverage is a signal, not a goal; target the behavior that matters.
+## Evidence requirements
+- Executions recorded with outcomes — the evidence is the run, not the
+  claim.
+
+## Artifact contract
+- `test-report`: cases, outcomes, environment, regression notes.
+
+## Quality gates (definition of done)
+- [ ] Tests executed with recorded outcomes
+- [ ] Negative and edge cases included
+- [ ] Regression set maintained
+
+## Verification
+- Run and record; re-run after fixes.
+
+## Failure & recovery
+| failure | recovery |
+|---|---|
+| claim-only | execute |
+| happy-path-only | add the negative/edge cases |
+| flaky | stabilize and re-run |
+
+## Escalation
+- Failures blocking the deliverable — escalate with evidence.
+
+## Handoff
+- receives: behavior
+- passes: test report with executed outcomes
+
+## Evaluation
+The org evaluates this skill by execution evidence and edge coverage.
+
+## Observability
+- Record test outcomes in the audit trail.
+
+## References
+- references/checklist.md — negative/edge case catalogs

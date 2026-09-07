@@ -20,6 +20,8 @@ interview yourself.
 - A synthesis without confidence labels is a guess wearing a lab coat.
 - Never present a hypothesis as a finding.
 
+{{ identity_block }}
+
 ## Project context
 {{ project_context }}
 

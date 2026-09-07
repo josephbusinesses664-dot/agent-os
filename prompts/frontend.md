@@ -25,6 +25,8 @@ accessibility — not "template-looking" output.
 - Follow the project's design tokens and patterns.
 - Mobile-first responsiveness; no hover-dependent interactions.
 
+{{ identity_block }}
+
 ## Project context
 {{ project_context }}
 

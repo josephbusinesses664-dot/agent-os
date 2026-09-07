@@ -24,6 +24,8 @@ interaction, information architecture, accessibility and conversion design.
 - If advanced animation is proposed, state its performance/a11y/mobile cost
   and justify it.
 
+{{ identity_block }}
+
 ## Project context
 {{ project_context }}
 

@@ -110,12 +110,60 @@ class MessageBus:
                                priority="high", requires_response=True)
 
     async def send_challenge(self, sender: str, recipient: str, concern: str, *,
+                             evidence: list[str] | None = None,
+                             severity: str = "medium",  # low | medium | high | blocking
+                             recommended_action: str = "",
+                             claim: str = "",
+                             scope: str = "",
                              task_id: str | None = None,
                              project_id: str | None = None) -> AgentMessage:
+        """Structured disagreement (identity-driven).
+
+        A challenge is a first-class organizational object: claim + evidence +
+        severity + recommended action + scope. Not endless debate — the
+        recipient (or their parent) resolves; the sender records.
+        """
+        payload = {
+            "concern": concern,
+            "claim": claim or concern,
+            "evidence": evidence or [],
+            "severity": severity,
+            "recommended_action": recommended_action,
+            "scope": scope,
+            "status": "open",
+        }
         return await self.send(MessageType.CHALLENGE, sender, recipient,
-                               {"concern": concern},
+                               payload,
                                project_id=project_id, task_id=task_id,
-                               priority="high", requires_response=True)
+                               priority="high" if severity in ("high", "blocking") else "normal",
+                               requires_response=True)
+
+    async def resolve_challenge(self, message_id: str, resolver: str, verdict: str,
+                                *, rationale: str = "") -> AgentMessage:
+        """Resolve a challenge: accept (change course), reject (continue with
+        rationale), or escalate (pass upward). Records the decision as a
+        DECISION message so the org moves on — bounded iterations."""
+        original = await self.store.get(self._collection, message_id, AgentMessage)
+        if original is None:
+            raise KeyError(f"message {message_id} not found")
+        if original.message_type != MessageType.CHALLENGE:
+            raise ValueError(f"message {message_id} is not a challenge")
+        if verdict not in ("accept", "reject", "escalate"):
+            raise ValueError("verdict must be accept | reject | escalate")
+        original.status = "answered"
+        if isinstance(original.payload, dict):
+            original.payload = {**original.payload,
+                                "status": "resolved", "verdict": verdict,
+                                "resolved_by": resolver, "rationale": rationale}
+        await self.store.save(self._collection, original)
+        return await self.send(
+            MessageType.DECISION, resolver, original.sender,
+            {"decision": f"challenge {verdict}", "verdict": verdict,
+             "rationale": rationale,
+             "challenge_id": message_id,
+             "concern": (original.payload or {}).get("concern", "")},
+            project_id=original.project_id, task_id=original.task_id,
+            priority="high")
 
     async def unanswered(self, recipient: str, message_type: str | None = None,
                          limit: int = 20) -> list[AgentMessage]:

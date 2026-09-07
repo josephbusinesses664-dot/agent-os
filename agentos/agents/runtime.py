@@ -17,6 +17,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
+from agentos.agents.identity import identity_prompt_block
 from agentos.domain.models import (
     AgentDef,
     ModelResponse,
@@ -175,6 +176,7 @@ class AgentRuntime:
             "role": self.agent.role,
             "name": self.agent.name,
             "description": self.agent.description,
+            "identity_block": identity_prompt_block(self.agent.identity),
             "responsibilities": f"Parent: {self.agent.parent_agent or 'none'}. "
                                 f"Escalate unresolved issues to your parent agent.",
             "project_context": project_context,

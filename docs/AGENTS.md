@@ -24,9 +24,61 @@ Executive Director
 
 Each agent carries: id/name/role/description, parent + allowed children,
 recommended skills, permitted tools, model policy (tier + max tier),
-budget policy, explicit permission map (least privilege), memory scope and
-risk level. Definitions live in `agentos/agents/hierarchy.py` (and can be
-overridden via the registry or CLI).
+budget policy, explicit permission map (least privilege), memory scope,
+risk level, and a structured **identity**. Definitions live in
+`agentos/agents/hierarchy.py` (and can be overridden via the registry or
+CLI).
+
+## Agent identity (cognitive layer)
+
+Every built-in agent carries an `AgentIdentity` (`agentos/agents/identities.py`):
+
+| Field | Meaning | Consumed by |
+|---|---|---|
+| `archetype` | cognitive pattern: executive / architect / researcher / product / designer / engineer / qa / security / operations / sales / marketing | prompt composition |
+| `mission` | the one question this agent owns (role boundaries) | prompt composition |
+| `priorities` | ranked, first = highest | prompt composition |
+| `decision_framework` | ordered questions the agent applies | prompt composition |
+| `risk_tolerance` | minimal / low / moderate / high | routing + judgment |
+| `autonomy` | L0 recommend-only … L5 executive-within-policy | prompt composition |
+| `evidence_standard` | what counts as proof for this role | prompt composition |
+| `quality_standard` | the bar the agent holds work to | prompt composition |
+| `anti_patterns` | behaviors the agent refuses | prompt composition |
+| `communication_style` / `disagreement_style` / `escalation_policy` / `failure_behavior` | how the agent talks, disagrees, escalates, recovers | prompt + challenge protocol |
+
+The identity renders as an operational block in every agent prompt (see
+`identity_prompt_block`). It is judgment, not authority: **identity never
+overrides permissions, budgets or approval gates.** An agent claiming to be
+the CEO gains nothing.
+
+Autonomy levels: L0 recommend only · L1 reversible low-risk actions ·
+L2 routine project actions · L3 multi-step tasks in approved scope ·
+L4 coordinate/delegate across agents · L5 executive decisions within policy.
+Dangerous external actions still require explicit approval regardless of
+level.
+
+Role boundaries (each agent owns exactly one question): product-researcher
+asks "what do customers need?", market-researcher "what is happening in the
+market?", competitor-analyst "how are alternatives positioned?", product-
+manager "what should we build?", software-architect "how should it be
+built?", qa-director "does it actually work?", security-reviewer "can it be
+abused?", executive "is the initiative worth doing?".
+
+## Structured disagreement (challenges)
+
+Agents disagree through first-class challenge objects, not chat noise:
+
+```
+agent.challenge:  {agent, concern, claim, evidence[], severity,
+                   recommended_action, scope}
+agent.resolve:    {challenge_id, verdict: accept|reject|escalate,
+                   rationale}   # rejection requires a rationale
+```
+
+Challenges carry evidence and severity; `blocking`/`high` challenges emit
+`agent.challenge` events. Resolution is bounded — the recipient (or its
+parent) decides and a DECISION message records the verdict, so the
+organization moves on instead of debating forever.
 
 ## Permissions
 

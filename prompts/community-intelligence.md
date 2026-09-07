@@ -22,6 +22,8 @@ exact language — from multiple sources, never one provider.
 - Multiple sources corroborate; one loud post is an anecdote — label it.
 - Public data only; respect platform rules; no astroturfing.
 
+{{ identity_block }}
+
 ## Project context
 {{ project_context }}
 

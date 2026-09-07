@@ -3,6 +3,12 @@
 Supports discovery, metadata, categories, versioning, dependencies,
 activation/deactivation, compatibility, model recommendations, cost/risk
 classification and progressive loading (only relevant skills enter context).
+
+Progressive disclosure (skill-contract upgrade): SKILL.md bodies stay compact;
+deep material lives in `references/*.md` per skill and is loaded only on
+demand via `load_reference`. Evaluation/regression cases live in
+`evals/cases.yaml` per skill and feed the existing benchmark runner via
+`load_evals`.
 """
 
 from __future__ import annotations
@@ -12,6 +18,7 @@ from typing import Optional
 
 from agentos.db.store import EntityStore
 from agentos.domain.models import SkillDef
+from agentos.evaluation.datasets import RegressionDataset
 from agentos.skills.loader import load_skill_dir
 from agentos.skills.search import search_skills
 
@@ -84,3 +91,43 @@ class SkillRegistry:
         """Return full skill bodies (progressive loading entry point)."""
         found = await self.search(query, agent_id=agent_id, limit=limit)
         return await self.resolve_dependencies([s.id for s in found])
+
+    # ------------------------------------------------------------------
+    # Progressive disclosure: references + evaluation cases
+    # ------------------------------------------------------------------
+    def _skill_dir(self, skill: SkillDef) -> Path:
+        return Path(skill.source_path).parent
+
+    async def list_references(self, skill_id: str) -> list[str]:
+        """Names of deep reference files available for a skill (loaded on
+        demand, never into the base context)."""
+        skill = await self.get(skill_id)
+        if not skill:
+            return []
+        return list(skill.references)
+
+    async def load_reference(self, skill_id: str, name: str) -> Optional[str]:
+        """Read one reference file for a skill. Returns None when the skill or
+        the reference does not exist."""
+        skill = await self.get(skill_id)
+        if not skill or name not in skill.references:
+            return None
+        path = self._skill_dir(skill) / "references" / name
+        if not path.exists():
+            return None
+        return path.read_text(errors="replace")
+
+    async def load_evals(self, skill_id: str) -> Optional[RegressionDataset]:
+        """Evaluation/regression cases for a skill from `evals/cases.yaml`.
+        The returned dataset runs through the EXISTING benchmark runner — no
+        second evaluation framework."""
+        skill = await self.get(skill_id)
+        if not skill:
+            return None
+        path = self._skill_dir(skill) / "evals" / "cases.yaml"
+        if not path.exists():
+            return None
+        try:
+            return RegressionDataset.load_yaml(path, fallback_name=f"skill:{skill_id}")
+        except Exception:  # noqa: BLE001
+            return None

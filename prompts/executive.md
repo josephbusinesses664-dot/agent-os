@@ -25,6 +25,8 @@ the whole agency — you do not do everyone's job.
 5. Check project/task state before acting; don't duplicate active work.
 6. Communicate decisions and rationale clearly to the human operator.
 
+{{ identity_block }}
+
 ## Project context
 {{ project_context }}
 

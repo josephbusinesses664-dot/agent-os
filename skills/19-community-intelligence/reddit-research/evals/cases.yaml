@@ -1,0 +1,45 @@
+description: >
+  Regression cases for the reddit-research skill. Focus: complaint vs
+  buying-intent separation, evidence lineage, and refusing to generalize
+  from small samples. Runs through the existing benchmark runner
+  (`agent-os evaluate skill:reddit-research`).
+cases:
+  - title: Separate complaint from buying intent
+    description: >
+      Given two threads — "I wish someone made X" (one-off complaint) and
+      "I've tried 5 products, none work, I'd pay $50/month" (replacement
+      intent + willingness to pay) — classify both using the signal taxonomy
+      and state which theme is the demand signal. Do not average them into
+      one sentiment score.
+    agent: community-researcher
+    skill: reddit-research
+    expected_markers: ["complaint", "willingness to pay", "replacement intent"]
+    min_output_len: 150
+    priority: high
+  - title: Refuse market-size claims from subreddit samples
+    description: >
+      Given 4 threads across 3 subreddits about a pain theme, produce the
+      theme summary. The artifact must label the sample size and must NOT
+      contain any market-size or population-level claim.
+    agent: community-researcher
+    skill: reddit-research
+    expected_markers: ["sample", "threads"]
+    min_output_len: 120
+  - title: Preserve evidence lineage
+    description: >
+      Every theme claim in the report must carry quote, link, subreddit and
+      date. A report entry lacking any of these fails verification.
+    agent: community-researcher
+    skill: reddit-research
+    expected_markers: ["quote", "link", "date"]
+    min_output_len: 120
+  - title: Loud thread is not a strong theme
+    description: >
+      Given a 210-upvote hype post versus a quiet 8-comment thread with a
+      detailed workflow problem and a stated budget, rank the quiet thread
+      higher for demand and explain why (high-engagement / low-intent).
+    agent: community-researcher
+    skill: reddit-research
+    expected_markers: ["low-intent", "workflow"]
+    min_output_len: 120
+    priority: high

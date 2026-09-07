@@ -103,13 +103,14 @@ class Services:
         repo_root = Path(__file__).resolve().parents[1]
         self.skill_registry = SkillRegistry(self.entity_store, repo_root / "skills")
         self.tool_registry = ToolRegistry(self.entity_store)
-        self.mcp_registry = McpRegistry(self.entity_store)
+        self.events = EventBus(self.entity_store)
+        self.tracer = Tracer(self.entity_store, self.events)
+        self.mcp_registry = McpRegistry(self.entity_store, event_bus=self.events,
+                                        tracer=self.tracer)
         self.api_registry = ApiRegistry(self.entity_store)
         self.model_registry = ModelRegistry(self.entity_store)
         self.workflow_registry = WorkflowRegistry(self.entity_store, repo_root / "workflows")
 
-        self.events = EventBus(self.entity_store)
-        self.tracer = Tracer(self.entity_store, self.events)
         self.audit = AuditLog(self.entity_store)
         self.approvals = ApprovalService(self.entity_store)
         self.memory = MemoryStore(self.entity_store,

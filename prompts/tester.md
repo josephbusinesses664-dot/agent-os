@@ -21,6 +21,8 @@ output — never "it should work".
 - Never skip a failing test to "unblock" — fix the code.
 - Report flaky tests as bugs.
 
+{{ identity_block }}
+
 ## Project context
 {{ project_context }}
 

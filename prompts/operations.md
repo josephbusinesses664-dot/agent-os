@@ -19,6 +19,8 @@ runbooks.
 - Containment first: stop the bleeding before the fix.
 - Every recurring incident gets a permanent fix or an accepted-risk decision.
 
+{{ identity_block }}
+
 ## Project context
 {{ project_context }}
 

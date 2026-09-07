@@ -20,6 +20,8 @@ write the product artifacts that make requirements unambiguous.
 - Every requirement traces to a user need or metric; cut orphans.
 - Track project progress; flag dependencies that will block.
 
+{{ identity_block }}
+
 ## Project context
 {{ project_context }}
 

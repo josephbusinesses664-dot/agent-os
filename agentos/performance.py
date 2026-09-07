@@ -5,15 +5,21 @@ Every completed run records correctness, verification status, quality
 outcome. These statistics are consumed by the model router (weaker performers
 get routed to stronger models) and delegation (better performers get more
 suitable work). No cosmetic XP anywhere: the numbers drive real decisions.
+
+Per-skill stats are one more view over the same EvaluationRecords: when an
+evaluation record carries a skill_id, the tracker folds it into that skill's
+aggregate (per agent and per model) so the organization can learn which
+agent/model performs best at a given skill. Only real observations — never
+fabricated scores.
 """
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import Any, Optional
 
 from agentos.db.store import EntityStore
-from agentos.domain.models import EvaluationRecord, PerformanceStats
+from agentos.domain.models import EvaluationRecord, PerformanceStats, SkillPerformance
 
 DAY_FORMAT = "%Y-%m-%d"
 WEEK_FORMAT = "%Y-W%U"
@@ -76,7 +82,9 @@ class PerformanceTracker:
             await self.store.save(self._collection, stats)
 
     async def record_evaluation(self, record: EvaluationRecord) -> None:
-        """Fold evaluator/review scores into agent stats (quality signal)."""
+        """Fold evaluator/review scores into agent stats (quality signal) and
+        — when the record carries a skill_id — into that skill's performance
+        aggregate."""
         if not record.agent_id:
             return
         for window in ("all", "weekly", "daily"):
@@ -91,17 +99,54 @@ class PerformanceTracker:
             stats.avg_review_score = (prev_avg + record.score) / stats.evaluations_total
             stats.updated_at = datetime.now(timezone.utc)
             await self.store.save(self._collection, stats)
-        if record.agent_id and record.passed:
-            pass  # event below
+        if record.skill_id:
+            await self._update_skill(record)
         if self.emit:
             try:
                 await self.emit("agent.evaluated", {
                     "agent": record.agent_id, "score": record.score,
                     "passed": record.passed, "evaluator": record.evaluator,
+                    "skill": record.skill_id,
                 }, agent_id=record.agent_id, task_id=record.task_id,
                     severity="warning" if not record.passed else "info")
             except Exception:  # noqa: BLE001
                 pass
+
+    # -- skill-level performance (same records, aggregated by skill) ---------
+    async def _update_skill(self, record: EvaluationRecord) -> SkillPerformance:
+        stats = await self._load_skill(record.skill_id)
+        prev_avg = stats.avg_score * stats.runs
+        prev_lat = stats.avg_latency_ms * stats.runs
+        stats.runs += 1
+        if record.passed:
+            stats.passed += 1
+        stats.pass_rate = round(stats.passed / stats.runs, 4)
+        stats.avg_score = round((prev_avg + record.score) / stats.runs, 2)
+        stats.avg_latency_ms = round((prev_lat + (record.latency_ms or 0)) / stats.runs, 1)
+        stats.total_cost = round(stats.total_cost + (record.cost or 0.0), 5)
+        for key, value in (("by_agent", record.agent_id), ("by_model", record.model_id)):
+            if not value:
+                continue
+            bucket = stats.by_agent if key == "by_agent" else stats.by_model
+            b = bucket.setdefault(value, {"runs": 0, "passed": 0, "score": 0.0})
+            b["runs"] += 1
+            b["passed"] += int(record.passed)
+            b["score"] = round((b["score"] * (b["runs"] - 1) + record.score) / b["runs"], 2)
+        stats.updated_at = datetime.now(timezone.utc)
+        await self.store.save("skill_performance", stats)
+        return stats
+
+    async def _load_skill(self, skill_id: str) -> SkillPerformance:
+        stats = await self.store.get("skill_performance", skill_id, SkillPerformance)
+        if stats is None:
+            stats = SkillPerformance(skill_id=skill_id)
+            await self.store.save("skill_performance", stats)
+        return stats
+
+    async def skill_stats(self, skill_id: str) -> SkillPerformance:
+        """Per-skill performance aggregate (runs, pass rate, score, cost,
+        latency, per-agent and per-model breakdown)."""
+        return await self._load_skill(skill_id)
 
     async def _update(self, agent_id: str, window: str, meta: dict) -> PerformanceStats:
         stats = await self._load(agent_id, window)

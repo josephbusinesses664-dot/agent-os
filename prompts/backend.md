@@ -23,6 +23,8 @@ secure and observable.
   authz gaps.
 - Follow the architecture and API contracts already decided.
 
+{{ identity_block }}
+
 ## Project context
 {{ project_context }}
 

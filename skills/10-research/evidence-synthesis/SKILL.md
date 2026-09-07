@@ -1,44 +1,118 @@
 ---
 id: evidence-synthesis
 name: Evidence Synthesis
-description: Combine evidence from many sources into a defensible conclusion with uncertainty labeled.
+description: "Evidence engineering — extraction, dedup, contradiction detection, confidence — claims ≠ facts."
 category: 10-research
-version: 1.0.0
+version: 1.1.0
 source: agent-os core library
 license: MIT
 capability_type: skill
-required_tools: []
+required_tools: [web.search, web.scrape]
 risk_level: low
 cost_level: low
-tags: [synthesis, evidence, research]
-compatible_agents: [research-director, market-researcher]
+dependencies: [research-planning]
+compatible_agents: [market-researcher, technical-researcher, community-researcher]
+tags: [evidence, synthesis, research]
+contract:
+  prerequisites:
+    - "research questions (from research-planning) and raw findings"
+  preferred_agents: [market-researcher, technical-researcher]
+  preferred_models: []
+  minimum_model_capability: t2
+  expected_cost: low
+  expected_latency: hours
+  evidence_requirements:
+    - "every claim carries source, date, excerpt, confidence"
+    - "contradictions preserved, not averaged away"
+  artifact_contract:
+    - "evidence synthesis (claims, confidence, contradictions, conclusion)"
+  quality_gates:
+    - "claim ≠ fact — observation, inference, and assumption separated"
+    - "deduplicated evidence"
+    - "contradiction table present where sources disagree"
+    - "confidence per conclusion"
+  verification:
+    - "spot-check cited sources; confirm excerpts match claims"
+  failure_modes:
+    false_certainty: "lower confidence — never inflate because the model sounds sure"
+    source_dominance: "independent confirmation required for load-bearing claims"
+  escalation:
+    - "irreconcilable contradictions on decision-critical facts"
+  handoff_in:
+    - "research questions"
+    - "raw findings"
+  handoff_out:
+    - "evidence synthesis with confidence and unknowns"
+  evaluation:
+    - "evidence quality (sources, dates)"
+    - "contradiction handling"
+    - "confidence calibration"
+  observability:
+    - "record claims with provenance"
+  related_skills: [research-planning, market-research, competitor-analysis]
 ---
 
 # Evidence Synthesis
 
 ## Purpose
-Turn many sources into one defensible conclusion — with disagreement,
-uncertainty and gaps reported honestly.
+Turn raw findings into decision-grade evidence: extract claims with
+provenance, deduplicate, detect contradictions, and report confidence —
+with the iron rule that claim ≠ fact.
 
-## Method
-1. **Collect** — every relevant claim as: claim | source | date | type
-   (primary/secondary/opinion).
-2. **Assess quality** — source authority, recency, bias, methodology.
-3. **Cross-check** — find corroboration and contradiction; where sources
-   disagree, report both with weights.
-4. **Weight** — primary + recent + authoritative > anecdote.
-5. **Conclude** — a conclusion with explicit confidence (high/medium/low) and
-   the reasoning chain.
-6. **Report gaps** — what's unknown and what would change the conclusion.
+## When to use / When NOT to use
+- use: after gathering research findings, before drawing conclusions
+- avoid: treating a confident-sounding summary as evidence; avoid averaging
+  away contradictions
 
-## Output
-```markdown
-## Conclusion (confidence: X)
-## Supporting evidence (weighted)
-## Disagreements
-## Unknowns / would-change-the-answer factors
-```
+## Workflow
+1. Extract claims: source, source_type, publication date, retrieval date,
+   excerpt, confidence, relevance.
+2. Deduplicate: same claim from many sources → one entry with source list.
+3. Detect contradictions; build a contradiction table where sources
+   disagree.
+4. Separate observation / inference / assumption per claim.
+5. Synthesize per question with a confidence level.
+6. Report unknowns explicitly; recommend an experiment where evidence is
+   thin.
 
-## Rules
-- A synthesis without confidence labels is a guess wearing a lab coat.
-- Never average sources into false certainty — disagreements are findings.
+## Evidence requirements
+- Claims carry full provenance.
+- Contradictions preserved and investigated, never silenced by averaging.
+
+## Artifact contract
+- `evidence-synthesis`: claims (with provenance), contradiction table,
+  per-question conclusions with confidence, unknowns.
+
+## Quality gates (definition of done)
+- [ ] Claim ≠ fact separation (observation/inference/assumption)
+- [ ] Deduplicated evidence
+- [ ] Contradiction table present
+- [ ] Confidence per conclusion
+- [ ] Sources spot-checked
+
+## Verification
+- Spot-check cited sources; confirm excerpts match claims.
+
+## Failure & recovery
+| failure | recovery |
+|---|---|
+| false certainty | lower confidence |
+| source dominance | require independent confirmation |
+| weak evidence | say so; recommend an experiment |
+
+## Escalation
+- Irreconcilable contradictions on decision-critical facts.
+
+## Handoff
+- receives: research questions, raw findings
+- passes: evidence synthesis with confidence and unknowns
+
+## Evaluation
+The org evaluates this skill by evidence quality, contradiction handling,
+and confidence calibration — never by tone.
+
+## Observability
+- Record claims with provenance in the audit trail.
+
+## References
+- references/methodology.md — extraction and contradiction rules

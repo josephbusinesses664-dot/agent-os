@@ -16,8 +16,18 @@ carrying the capability metadata required by the registry:
     risk_level: low
     cost_level: low
     tags: [market, research]
+    contract:
+      prerequisites: ["a defined decision or hypothesis"]
+      preferred_agents: [market-researcher]
+      quality_gates: [...]
+      ...
     ---
     # Body markdown follows — loaded lazily into agent context.
+
+In addition to the frontmatter, the loader discovers a skill's progressive-
+disclosure assets: `references/*.md` (deep material loaded only on demand)
+and `evals/cases.yaml` (regression/evaluation cases consumed by the existing
+benchmark runner).
 """
 
 from __future__ import annotations
@@ -27,9 +37,28 @@ from typing import Optional
 
 import yaml
 
-from agentos.domain.models import SkillDef
+from agentos.domain.models import SkillContract, SkillDef
 
-FRONTMATTER_RE = None  # replaced by manual split below
+
+def _parse_contract(raw: object) -> SkillContract:
+    """Tolerantly parse a `contract:` frontmatter block into a SkillContract.
+    Unknown keys are dropped; a malformed block degrades to an empty
+    contract rather than failing the whole skill."""
+    if not isinstance(raw, dict):
+        return SkillContract()
+    known = SkillContract.model_fields.keys()
+    cleaned = {k: v for k, v in raw.items() if k in known}
+    try:
+        return SkillContract(**cleaned)
+    except Exception:  # noqa: BLE001
+        return SkillContract()
+
+
+def _discover_references(skill_dir: Path) -> list[str]:
+    refs_root = skill_dir / "references"
+    if not refs_root.exists():
+        return []
+    return sorted(p.name for p in refs_root.glob("*.md") if p.is_file())
 
 
 def parse_skill_md(text: str, source_path: str = "") -> Optional[SkillDef]:
@@ -71,7 +100,12 @@ def parse_skill_md(text: str, source_path: str = "") -> Optional[SkillDef]:
     meta.setdefault("permissions", {})
     meta.setdefault("examples", [])
     meta.setdefault("tests", [])
-    return SkillDef(body=body, source_path=source_path, **meta)
+    # skill contract (machine-readable operational metadata)
+    contract = _parse_contract(meta.pop("contract", None))
+    skill_dir = Path(source_path).parent if source_path else Path()
+    references = _discover_references(skill_dir)
+    return SkillDef(body=body, source_path=source_path, contract=contract,
+                    references=references, **meta)
 
 
 def load_skill_dir(root: Path) -> list[SkillDef]:

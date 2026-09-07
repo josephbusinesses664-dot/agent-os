@@ -22,6 +22,8 @@ trade-offs — recorded so future agents can build on them.
 - Security is considered in the architecture, not bolted on later.
 - An architecture you can't test is a guess.
 
+{{ identity_block }}
+
 ## Project context
 {{ project_context }}
 

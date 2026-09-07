@@ -1,52 +1,117 @@
 ---
 id: code-review
 name: Code Review
-description: Structured code review — correctness, readability, architecture, security, performance, tests, maintainability.
+description: "Structured code review — correctness, architecture, security, performance, testing — with severity-ranked findings."
 category: 06-testing
-version: 1.0.0
-source: agent-os core library (Addy Osmani code-review methodology)
+version: 1.1.0
+source: agent-os core library (Addy Osmani review methodology)
 license: MIT
 capability_type: skill
-required_tools: [filesystem.read]
+required_tools: [repo.search, shell.write]
 risk_level: low
 cost_level: low
-tags: [code-review, quality]
+dependencies: [code-quality, security-review]
 compatible_agents: [code-reviewer, qa-director]
+tags: [review, code-quality]
+contract:
+  prerequisites:
+    - "a diff or change to review"
+    - "the requirements it implements"
+  preferred_agents: [code-reviewer]
+  preferred_models: []
+  minimum_model_capability: t2
+  expected_cost: low
+  expected_latency: minutes
+  evidence_requirements:
+    - "each finding tied to a file/location and a concrete problem"
+  artifact_contract:
+    - "code review (severity-ranked findings with fixes)"
+  quality_gates:
+    - "dimensions covered: correctness, readability, architecture, security, performance, testing"
+    - "findings machine-actionable (file, location, fix)"
+  verification:
+    - "run the tests/typecheck to check review claims"
+  failure_modes:
+    nit_flood: "rank by severity; skip trivial nits"
+    unverified_claim: "run the code before asserting a bug"
+  escalation:
+    - "security-critical findings"
+  handoff_in:
+    - "diff"
+    - "requirements"
+  handoff_out:
+    - "review with findings and approval recommendation"
+  evaluation:
+    - "finding precision (few false positives)"
+    - "real issues caught"
+  observability:
+    - "record the review verdict and findings"
+  related_skills: [implementation-review, code-quality, security-review]
 ---
 
 # Code Review
 
 ## Purpose
-Review changes against seven dimensions and produce structured findings —
-not vague "looks good".
+Review changes structurally — correctness, readability, architecture,
+security, performance, testing — producing severity-ranked, actionable
+findings.
 
-## Dimensions
-1. **Correctness** — does it do what it claims? Edge cases, off-by-one,
-   race conditions, error paths?
-2. **Readability** — can a new engineer understand it? Names, structure,
-   unnecessary cleverness.
-3. **Architecture** — fits the system's boundaries; no duplicated logic; no
-   misplaced responsibilities; change is proportionate.
-4. **Security** — injection, secrets, authz, unsafe input/output, dangerous
-   tools/commands.
-5. **Performance** — obvious inefficiency (N+1, layout thrash, blocking I/O
-   in hot paths); premature optimization flagged separately.
-6. **Testing** — tests exist for the behavior, cover the failure paths, and
-   actually run.
-7. **Maintainability** — the next change to this code is cheap; state is
-   explicit; docs match reality.
+## When to use / When NOT to use
+- use: before merge of any non-trivial change
+- avoid: reviewing without the requirements (judge against intent);
+  avoid nit-flooding instead of finding real issues
 
-## Finding format
-```yaml
-severity: critical | high | medium | low | nit
-file: path
-location: function/line
-problem: <what is wrong>
-reason: <why it matters>
-recommended_fix: <concrete>
-```
+## Inputs & assumptions
+- inputs: diff, requirements
+- assumptions: stated requirements are the review contract
 
-## Rules
-- Block on critical/high; discuss medium; nits are optional but collected.
-- Review the diff with context (surrounding code, callers), not in isolation.
-- Verify claims: if a test "passes", the run output should be visible.
+## Workflow
+1. Read the requirements; read the diff in context.
+2. Check each dimension: correctness (does it work, edge cases), readability,
+   architecture (fits the system), security (authz, injection, secrets),
+   performance (hot paths), testing (are behaviors covered).
+3. For each finding: severity, file, location, problem, reason,
+   recommended fix.
+4. Verify load-bearing claims by running tests/typecheck where feasible.
+5. Produce the review with an approval recommendation.
+
+## Evidence requirements
+- Findings are machine-actionable: file, location, problem, fix.
+- Unverified claims are labeled as questions, not bugs.
+
+## Artifact contract
+- `code-review`: findings (severity, file, location, problem, reason,
+  fix), verdict, approval recommendation.
+
+## Quality gates (definition of done)
+- [ ] All six dimensions covered
+- [ ] Findings severity-ranked
+- [ ] Load-bearing claims verified by execution
+- [ ] Verdict matches the findings
+
+## Verification
+- Run tests/typecheck to confirm suspected bugs.
+
+## Failure & recovery
+| failure | recovery |
+|---|---|
+| nit flood | rank by severity; drop trivia |
+| unverified bug claim | run it before asserting |
+| unclear finding | add the concrete location and fix |
+
+## Escalation
+- Security-critical findings — escalate immediately with the evidence.
+
+## Handoff
+- receives: diff, requirements
+- passes: review with findings and approval recommendation
+
+## Evaluation
+The org evaluates this skill by finding precision and real-issue
+catch rate — a review full of style nits and no real bugs fails.
+
+## Observability
+- Record the review verdict and findings in the audit trail.
+
+## References
+- references/checklist.md — review walkthrough by dimension
