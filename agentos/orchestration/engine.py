@@ -57,14 +57,16 @@ class OrchestratorEngine:
     # ------------------------------------------------------------------
     async def execute_goal(self, goal: str, user_id: str = "human",
                            workflow_id: Optional[str] = None,
-                           project_name: Optional[str] = None) -> dict:
+                           project_name: Optional[str] = None,
+                           home_channel: str = "") -> dict:
         """Executive flow: create a project and run a workflow on it.
 
         By default the executive plans dynamically (keyword-scored stages,
         filtered by the branch directors) instead of blindly running the full
         0→100 pipeline. Pass a workflow_id to pin a fixed workflow."""
         if workflow_id is None:
-            result = await self.execute_dynamic(goal, user_id=user_id)
+            result = await self.execute_dynamic(goal, user_id=user_id,
+                                                home_channel=home_channel)
             result["project_name"] = result.get("project_name", "")
             return result
         name = project_name or _slug(goal)[:60] or "New Project"
@@ -78,7 +80,8 @@ class OrchestratorEngine:
 
     async def execute_dynamic(self, goal: str, user_id: str = "human",
                               stages: Optional[list[str]] = None,
-                              expand_full: bool = False) -> dict:
+                              expand_full: bool = False,
+                              home_channel: str = "") -> dict:
         """Autonomous planning: the planner selects the required stages from
         the goal (explicit PLANNED_STAGES marker, keyword scoring, or the full
         pipeline on request), then runs them through the same engine."""
@@ -99,6 +102,10 @@ class OrchestratorEngine:
         name = _slug(goal)[:60] or "New Project"
         project = await self.svc.projects.create(
             name, objective=goal, created_by=user_id, workflow_id=workflow.workflow_id)
+        mm = getattr(self.svc, "mattermost", None)
+        if mm is not None and home_channel:
+            # registered BEFORE the run so stage checkpoints can mirror home
+            mm._project_channels[project.project_id] = home_channel
         await self.svc.events.publish(
             "workflow.planned",
             {"goal": goal[:200], "stages": plan["stages"],
@@ -325,6 +332,15 @@ class OrchestratorEngine:
                 else:
                     await mm.post_as_agent(agent, label + body,
                                            channel=branch_channel_for(agent.id))
+                # checkpoints: the boss reads understanding + final report
+                # right where they asked for the work
+                home = mm._project_channels.get(project.project_id)
+                if home and stage.stage_id in ("understanding", "report"):
+                    if token:
+                        await mm.post_as_user(username_for(agent.id), token,
+                                              label + body, home)
+                    else:
+                        await mm.post_to(home, label + body)
             except Exception:  # noqa: BLE001
                 logger.exception("stage report mirror failed")
 

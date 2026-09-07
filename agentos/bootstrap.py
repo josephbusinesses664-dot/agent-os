@@ -146,15 +146,21 @@ async def on_mattermost_command(svc: Services) -> Any:
         msg_type = message.get("type")
         try:
             if msg_type == "chat":
-                await _executive_chat(svc, message)
+                await _executive_respond(svc, message)
             elif msg_type == "goal":
+                home = svc.mattermost._logical_for(message.get("channel", ""))
                 result = await svc.engine.execute_goal(message.get("text", ""),
-                                                       user_id=message.get("user_id", "human"))
+                                                       user_id=message.get("user_id", "human"),
+                                                       home_channel=home)
                 if svc.mattermost:
-                    await svc.mattermost.post_to(
-                        "executive",
-                        f"🚀 Project `{result['project_id']}` created — "
-                        f"workflow run `{result['run_id']}` status: {result['status']}")
+                    line = (f"🚀 Project `{result['project_id']}` created — "
+                            f"workflow run `{result['run_id']}` status: {result['status']}")
+                    await svc.mattermost.post_to("executive", line)
+                    # checkpoint where the human asked for it
+                    home = svc.mattermost._logical_for(message.get("channel", ""))
+                    svc.mattermost._project_channels[result["project_id"]] = home
+                    if home != "executive":
+                        await svc.mattermost.post_to(home, line)
             elif msg_type == "approval":
                 decision = message.get("decision", "approved")
                 await svc.engine.approve(message.get("approval_id", ""), decision,
@@ -174,8 +180,11 @@ async def on_mattermost_command(svc: Services) -> Any:
     return handler
 
 
-async def _executive_chat(svc: Services, message: dict) -> None:
-    """The executive answers casual chat as a person (no project spawned)."""
+async def _executive_respond(svc: Services, message: dict) -> None:
+    """The executive decides: is this message real work (GOAL) or chat?
+
+    Chat gets a personal reply; GOAL runs the full agency (dynamic planning,
+    director gate, workers) with checkpoints mirrored to the asking channel."""
     text = (message.get("text") or "").strip()
     if not text or svc.mattermost is None or not svc.mattermost.available:
         return
@@ -194,16 +203,45 @@ async def _executive_chat(svc: Services, message: dict) -> None:
             executive, None, description=text, project_id=None)
         model_def = await svc.model_registry.get(model_id) if model_id else None
     provider = svc.providers.get(model_def.provider) if model_def else None
+    channel = svc.mattermost._logical_for(message.get("channel", ""))
     if provider is None:
         await svc.mattermost.post_to(
-            svc.mattermost._logical_for(message.get("channel", "")),
-            "_(no model available right now — try again in a moment)_")
+            channel, "_(no model available right now — try again in a moment)_")
         return
+
+    # decision pass: real work or just conversation?
+    decision = ""
+    try:
+        decide_req = ModelRequest(
+            model_id=model_id,
+            system=("You are Alex, the Executive Director of an AI agency. The boss "
+                    "just sent you a message in Mattermost. Decide whether it asks you "
+                    "to actually DO work (research, build, plan, create, write, launch "
+                    "something) or is just conversation. Reply with exactly one word: "
+                    "GOAL or CHAT."),
+            messages=[{"role": "user", "content": text}],
+            agent_id="executive", temperature=0.1, max_tokens=10)
+        resp = await provider.complete(decide_req)
+        decision = (resp.content or "").strip().upper()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("executive decision call failed: %s", exc)
+
+    if decision.startswith("GOAL"):
+        result = await svc.engine.execute_goal(text,
+                                               user_id=message.get("user_id", "human"),
+                                               home_channel=channel)
+        line = (f"🚀 Project `{result['project_id']}` created — "
+                f"workflow run `{result['run_id']}` status: {result['status']}")
+        await svc.mattermost.post_to("executive", line)
+        svc.mattermost._project_channels[result["project_id"]] = channel
+        if channel != "executive":
+            await svc.mattermost.post_to(channel, line)
+        return
+
     system = identity_prompt_block(getattr(executive, "identity", None))
     system += ("\n\nYou are Alex, the Executive Director, talking to the boss in "
-               "Mattermost. This is casual conversation, not a project. Reply directly, "
-               "briefly and naturally. If the person is actually asking you to do real "
-               "work (build, plan, write), ask them to say so and it will be run as a project.")
+               "Mattermost. Reply directly, briefly and naturally. If you do decide "
+               "the request is real work, say so and actually run it.")
     req = ModelRequest(model_id=model_id, system=system,
                        messages=[{"role": "user", "content": text}],
                        agent_id="executive")
@@ -214,7 +252,6 @@ async def _executive_chat(svc: Services, message: dict) -> None:
         reply = f"_(sorry — the model call failed: {exc})_"
     if not reply:
         return
-    channel = svc.mattermost._logical_for(message.get("channel", ""))
     token = token_for_agent("executive")
     if token:
         await svc.mattermost.post_as_user(username_for("executive"), token, reply, channel)

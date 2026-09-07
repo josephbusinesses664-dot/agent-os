@@ -86,8 +86,19 @@ def classify_error(error: str) -> str:
     return "logic"
 
 
+_INVOKE_RE = re.compile(
+    r"<invoke\s+name=[\"\']([^\"\']+)[\"\']\s*(?:/>|>(.*?)</invoke>)", re.DOTALL)
+_PARAM_RE = re.compile(
+    r"<parameter\s+name=[\"\']([^\"\']+)[\"\']>([^<]*)</parameter>", re.DOTALL)
+
+
 def parse_tool_calls(response: ModelResponse) -> list[dict]:
     calls = list(response.tool_calls)
+    for name, body in _INVOKE_RE.findall(response.content or ""):
+        args = {}
+        for pname, pval in _PARAM_RE.findall(body):
+            args[pname] = pval.strip()
+        calls.append({"tool": name.strip(), "args": args})
     for block in TOOL_CALL_RE.findall(response.content or ""):
         try:
             parsed = json.loads(block)
@@ -267,6 +278,7 @@ class AgentRuntime:
             return result
 
         executed_signatures: set[str] = set()
+        duplicate_nudges = 0
         for round_index in range(MAX_TOOL_ROUNDS):
             if response.error:
                 result.error = response.error
@@ -287,6 +299,26 @@ class AgentRuntime:
                 executed_signatures.add(signature)
                 fresh_calls.append(call)
             if not fresh_calls:
+                if calls and duplicate_nudges < 2:
+                    # every call was a duplicate of an already-executed one:
+                    # nudge the model to continue instead of ending with a stub
+                    # (bounded: deterministic/echo models repeat forever)
+                    duplicate_nudges += 1
+                    messages.append({
+                        "role": "user",
+                        "content": ("[Your tool calls were identical to ones already "
+                                    "executed this turn — their results are above. "
+                                    "Continue the work or give your final answer "
+                                    "without tool calls.]"),
+                    })
+                    try:
+                        response = await self._call_with_failover(
+                            model_id, system, messages, task)
+                    except Exception as exc:  # noqa: BLE001
+                        result.error = str(exc)
+                        result.fail_class = classify_error(str(exc))
+                        return result
+                    continue
                 result.content = response.content or ""
                 break
             result.tool_calls.extend(fresh_calls)

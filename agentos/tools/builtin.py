@@ -40,6 +40,36 @@ def _path_inside(workspace: Path, rel: str) -> Path:
     return candidate
 
 
+async def _h_repo_tree(ctx: Any, args: dict) -> dict:
+    """List the project workspace tree (dirs + files, sandbox-confined)."""
+    project = ctx.project
+    base = project.workspace_dir if project is not None else ctx.services.settings.workspace_dir
+    path = str(args.get("path") or ".")
+    if path.startswith("/"):
+        path = path.lstrip("/")
+    import os
+    target = os.path.join(base, path) if path != "." else base
+    if not os.path.abspath(target).startswith(os.path.abspath(base)):
+        return {"ok": False, "error": "path escapes the workspace"}
+    if not os.path.exists(target):
+        return {"ok": True, "tree": f"(no such path: {path})"}
+    lines = []
+    for root, dirs, files in os.walk(target):
+        dirs.sort()
+        for d in dirs:
+            if d in (".git", "__pycache__", ".venv"):
+                continue
+            rel = os.path.relpath(os.path.join(root, d), base)
+            lines.append(f"{rel}/")
+        for f in sorted(files):
+            rel = os.path.relpath(os.path.join(root, f), base)
+            lines.append(rel)
+        if len(lines) > 400:
+            lines = lines[:400] + ["…(truncated)"]
+            break
+    return {"ok": True, "tree": "\n".join(lines), "count": len(lines)}
+
+
 async def _h_filesystem_read(ctx: Any, args: dict) -> dict:
     path = _path_inside(ctx.workspace, args["path"])
     if not path.exists():
@@ -689,6 +719,8 @@ async def _h_agent_resolve(ctx: Any, args: dict) -> dict:
 BUILTIN_TOOLS: list[ToolDef] = [
     ToolDef(name="filesystem.read", description="Read a file or list a directory inside the project workspace.",
             permission_key="filesystem.read", risk_level="low"),
+    ToolDef(name="repo.tree", description="List the project workspace file tree (dirs + files).",
+            permission_key="filesystem.read", risk_level="low"),
     ToolDef(name="filesystem.write", description="Write a file inside the project workspace.",
             permission_key="filesystem.write", risk_level="medium"),
     ToolDef(name="shell", description="Run a shell command inside the workspace (write commands need permission).",
@@ -759,6 +791,7 @@ BUILTIN_TOOLS: list[ToolDef] = [
 
 HANDLERS: dict[str, ToolHandler] = {
     "filesystem.read": _h_filesystem_read,
+    "repo.tree": _h_repo_tree,
     "filesystem.write": _h_filesystem_write,
     "shell": _h_shell,
     "web.search": _h_web_search,

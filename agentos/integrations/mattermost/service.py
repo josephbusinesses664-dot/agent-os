@@ -88,6 +88,7 @@ class MattermostService:
         self._last_post_ts: dict[str, int] = {}
         self._user_clients: dict[str, Any] = {}  # username -> MattermostClient
         self.agent_user_ids: set[str] = set()  # ids of the 41 agent accounts
+        self._project_channels: dict[str, str] = {}  # project_id -> logical channel the human asked from
 
     # -- lifecycle ----------------------------------------------------------
     async def connect(self) -> bool:
@@ -239,8 +240,14 @@ class MattermostService:
         if channel is None:
             return
         text = self._event_text(event)
-        if text:
-            await self.post_to(channel, text)
+        if not text:
+            return
+        await self.post_to(channel, text)
+        # also report lifecycle checkpoints where the human asked for them
+        if event.project_id and event.project_id in self._project_channels:
+            home = self._project_channels[event.project_id]
+            if home != channel:
+                await self.post_to(home, text)
 
     def _event_text(self, event: Event) -> str:
         payload = event.payload or {}
