@@ -225,9 +225,15 @@ async def _h_filesystem_read(ctx: Any, args: dict) -> dict:
 
 
 async def _h_filesystem_write(ctx: Any, args: dict) -> dict:
-    path = _path_inside(ctx.workspace, args["path"])
+    rel = str(args.get("path") or "").strip()
+    content = args.get("content")
+    if not rel:
+        return {"ok": False, "error": "filesystem.write requires a 'path' argument"}
+    if content is None:
+        return {"ok": False, "error": "filesystem.write requires 'content'"}
+    path = _path_inside(ctx.workspace, rel)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(args["content"])
+    path.write_text(content)
     return {"ok": True, "path": str(path), "bytes": path.stat().st_size}
 
 
