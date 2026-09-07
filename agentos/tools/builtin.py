@@ -112,7 +112,9 @@ async def _h_shell(ctx: Any, args: dict) -> dict:
 
 
 async def _h_web_search(ctx: Any, args: dict) -> dict:
-    query = args["query"]
+    query = str(args.get("query") or args.get("q") or args.get("search") or "")
+    if not query:
+        return {"ok": False, "error": "web.search requires a 'query' argument"}
     if ctx.services.web_search is None:
         return {"ok": False, "error": "web_search not configured (no search API key)"}
     try:
@@ -211,7 +213,10 @@ async def _h_mattermost_post(ctx: Any, args: dict) -> dict:
 async def _h_api_call(ctx: Any, args: dict) -> dict:
     if ctx.services.api_catalog is None:
         return {"ok": False, "error": "api catalog not configured"}
-    return await ctx.services.api_catalog.call_api(args["api"], args.get("path", ""), args.get("params", {}))
+    api = str(args.get("api") or "")
+    if not api:
+        return {"ok": False, "error": "api.call requires an 'api' name argument"}
+    return await ctx.services.api_catalog.call_api(api, args.get("path", ""), args.get("params", {}))
 
 
 async def _h_mcp_call(ctx: Any, args: dict) -> dict:
@@ -239,7 +244,10 @@ async def _h_mcp_select(ctx: Any, args: dict) -> dict:
 
 async def _h_repo_search(ctx: Any, args: dict) -> dict:
     """Search file contents under the workspace (simple recursive scan)."""
-    pattern = args["pattern"].lower()
+    pattern = str(args.get("pattern") or args.get("query") or "").strip().lower()
+    if not pattern:
+        return {"ok": False, "error": "repo.search requires a 'pattern' argument "
+                                      "(the substring to search for)"}
     max_results = min(int(args.get("max_results", 20)), 100)
     matches: list[dict] = []
     for path in ctx.workspace.rglob("*"):
@@ -718,25 +726,35 @@ async def _h_agent_resolve(ctx: Any, args: dict) -> dict:
 
 BUILTIN_TOOLS: list[ToolDef] = [
     ToolDef(name="filesystem.read", description="Read a file or list a directory inside the project workspace.",
-            permission_key="filesystem.read", risk_level="low"),
+            permission_key="filesystem.read", risk_level="low",
+            config={"parameters": {"path": {"type": "string", "description": "File path or directory inside the project workspace"}}}),
     ToolDef(name="repo.tree", description="List the project workspace file tree (dirs + files).",
-            permission_key="filesystem.read", risk_level="low"),
+            permission_key="filesystem.read", risk_level="low",
+            config={"parameters": {"path": {"type": "string", "description": "Directory to list, default workspace root"}}}),
     ToolDef(name="filesystem.write", description="Write a file inside the project workspace.",
-            permission_key="filesystem.write", risk_level="medium"),
+            permission_key="filesystem.write", risk_level="medium",
+            config={"parameters": {"path": {"type": "string", "description": "File path inside the project workspace"}, "content": {"type": "string", "description": "Complete file content"}}}),
     ToolDef(name="shell", description="Run a shell command inside the workspace (write commands need permission).",
-            permission_key="shell", risk_level="high"),
+            permission_key="shell", risk_level="high",
+            config={"parameters": {"command": {"type": "string", "description": "Shell command"}}}),
     ToolDef(name="web.search", description="Search the web. Returns ranked results with titles/URLs/snippets.",
-            permission_key="web.search", risk_level="low"),
+            permission_key="web.search", risk_level="low",
+            config={"parameters": {"query": {"type": "string", "description": "Search query"}}}),
     ToolDef(name="calculator", description="Evaluate a safe arithmetic expression.",
-            permission_key="calculator", risk_level="low"),
+            permission_key="calculator", risk_level="low",
+            config={"parameters": {"expression": {"type": "string", "description": "Math expression"}}}),
     ToolDef(name="memory.recall", description="Recall persisted memory entries (agent/project/org/task scope).",
-            permission_key="memory.recall", risk_level="low"),
+            permission_key="memory.recall", risk_level="low",
+            config={"parameters": {"query": {"type": "string", "description": "What to recall"}}}),
     ToolDef(name="memory.save", description="Persist a memory entry (fact, decision, lesson, preference).",
-            permission_key="memory.save", risk_level="low"),
+            permission_key="memory.save", risk_level="low",
+            config={"parameters": {"content": {"type": "string", "description": "Fact to remember"}}}),
     ToolDef(name="project.state", description="Inspect the current project and its task list.",
-            permission_key="project.state", risk_level="low"),
+            permission_key="project.state", risk_level="low",
+            config={"parameters": {}}),
     ToolDef(name="mattermost.post", description="Post a message to a Mattermost channel under this agent's identity.",
-            permission_key="mattermost.post", risk_level="low"),
+            permission_key="mattermost.post", risk_level="low",
+            config={"parameters": {"channel": {"type": "string", "description": "Channel name"}, "message": {"type": "string", "description": "Message text"}}}),
     ToolDef(name="api.call", description="Call a registered API from the API catalog (rate-limited, logged).",
             permission_key="api.call", risk_level="medium"),
     ToolDef(name="mcp.call", description="Call a tool on a governed MCP server (trust/permission/health gated, injection-scanned).",
@@ -744,7 +762,8 @@ BUILTIN_TOOLS: list[ToolDef] = [
     ToolDef(name="mcp.select", description="Rank available MCP tools for a capability need (trust-, permission- and health-aware).",
             permission_key="mcp.call", risk_level="low"),
     ToolDef(name="repo.search", description="Search file contents under the project workspace.",
-            permission_key="repo.search", risk_level="low", category="capability"),
+            permission_key="repo.search", risk_level="low",
+            config={"parameters": {"pattern": {"type": "string", "description": "Substring to search for in workspace files"}}}, category="capability"),
     ToolDef(name="repo.tree", description="List the project workspace file tree.",
             permission_key="repo.tree", risk_level="low", category="capability"),
     ToolDef(name="db.query", description="Run a read-only SQL query against a SQLite DB in the workspace.",

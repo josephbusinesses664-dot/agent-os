@@ -48,18 +48,27 @@ implement-frontend:
   name: Frontend Implementation
   agent_role: frontend-lead
   description: >
-    Implement the frontend per requirements and design. Type safety, error
-    handling, accessibility. Write a build report to
-    artifacts/implementation-frontend.md.
-    PLANNED_TOOL_CALLS: [{"tool":"filesystem.write","args":{"path":"artifacts/implementation-frontend.md","content":"AUTO"}}]
+    Build the actual frontend. Do NOT use any tools and do not read files —
+    you already have the mission, requirements and design direction. Your
+    FINAL ANSWER must be the COMPLETE landing page as raw HTML source: a
+    single self-contained page with inline CSS and any JavaScript it needs,
+    selling the product from the mission — polished hero, features,
+    how-it-works, CTA. Nothing but the HTML in your final answer.
+    PLANNED_TOOL_CALLS: []
 
 implement-backend:
   name: Backend Implementation
   agent_role: backend-lead
   description: >
-    Implement the backend/API per requirements. Validation, error handling,
-    tests. Write a build report to artifacts/implementation-backend.md.
-    PLANNED_TOOL_CALLS: [{"tool":"filesystem.write","args":{"path":"artifacts/implementation-backend.md","content":"AUTO"}}]
+    Build the working demo. Do NOT use any tools and do not read files — you
+    already have the mission, requirements and design direction. Your FINAL
+    ANSWER must be the COMPLETE interactive demo as raw HTML source: a single
+    self-contained page with inline CSS and real JavaScript that simulates
+    the product from the mission — a shared team room where several humans
+    and several AI agents collaborate on one goal: people typing, agents
+    responding, work being delegated, artifacts appearing. Make it feel
+    alive. Nothing but the HTML in your final answer.
+    PLANNED_TOOL_CALLS: []
 
 testing:
   name: Testing

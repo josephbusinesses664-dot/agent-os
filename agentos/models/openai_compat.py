@@ -43,6 +43,9 @@ class OpenAICompatProvider(Provider):
             "temperature": request.temperature,
             "max_tokens": request.max_tokens,
         }
+        if request.tools:
+            payload["tools"] = request.tools
+            payload["tool_choice"] = "auto"
         try:
             async with httpx.AsyncClient(timeout=120) as client:
                 resp = await client.post(

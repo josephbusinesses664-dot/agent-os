@@ -334,6 +334,22 @@ class OrchestratorEngine:
             span.result_summary = (outcome.content or "")[:200]
             await span_cm.__aexit__(None, None, None)
 
+        # persist the actual deliverable for the build stages: the agent's
+        # final answer IS the HTML source
+        if outcome.content and stage.stage_id in ("implement-frontend", "implement-backend"):
+            filename = "index.html" if stage.stage_id == "implement-frontend" else "demo.html"
+            import re as _re
+            m = _re.search(r"(<!DOCTYPE.*|<!doctype.*|<html.*</html>)",
+                           outcome.content, _re.I | _re.S)
+            html = m.group(1) if m else ""
+            if html:
+                try:
+                    target = self.svc.workspace / project.project_id / filename
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    target.write_text(html)
+                except Exception:  # noqa: BLE001
+                    logger.exception("failed to persist %s", filename)
+
         # mirror the agent's full response into its branch channel so the
         # humans can read the actual work (PRDs, briefs, reports, arguments)
         mm = getattr(self.svc, "mattermost", None)

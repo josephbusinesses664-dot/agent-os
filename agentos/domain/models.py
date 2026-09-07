@@ -351,6 +351,7 @@ class ModelRequest(BaseModel):
     project_id: Optional[str] = None
     agent_id: Optional[str] = None
     task_id: Optional[str] = None
+    tools: list[dict] = Field(default_factory=list)  # OpenAI-format tool schemas
 
 
 class ModelResponse(BaseModel):

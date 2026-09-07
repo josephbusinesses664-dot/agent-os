@@ -30,7 +30,7 @@ from agentos.tools.executor import ToolExecutor
 
 logger = logging.getLogger("agentos.runtime")
 
-MAX_TOOL_ROUNDS = 6
+MAX_TOOL_ROUNDS = 12
 TOOL_CALL_RE = re.compile(r"<tool_call>\s*(\{.*?\})\s*</tool_call>", re.DOTALL)
 _STRIP_XML_RE = re.compile(
     r"(<invoke\s+name=[\"\'][^\"\']+[\"\']\s*(?:/>|>.*?</invoke>)|"
@@ -112,7 +112,18 @@ _PARAM_RE = re.compile(
 
 
 def parse_tool_calls(response: ModelResponse) -> list[dict]:
-    calls = list(response.tool_calls)
+    import json as _json
+
+    calls = []
+    for native in response.tool_calls:
+        args = native.get("args")
+        if args is None and native.get("arguments"):
+            try:
+                args = _json.loads(native["arguments"])
+            except Exception:  # noqa: BLE001
+                args = {"raw": native["arguments"]}
+        calls.append({"tool": native.get("name") or native.get("tool") or "",
+                      "args": args if isinstance(args, dict) else {}})
     for name, body in _INVOKE_RE.findall(response.content or ""):
         args = {}
         for pname, pval in _PARAM_RE.findall(body):
@@ -298,6 +309,7 @@ class AgentRuntime:
 
         executed_signatures: set[str] = set()
         duplicate_nudges = 0
+        self._schema_name_map = {}
         for round_index in range(MAX_TOOL_ROUNDS):
             if response.error:
                 result.error = response.error
@@ -305,6 +317,8 @@ class AgentRuntime:
                 break
             await self._track_usage(response, task, result)
             calls = parse_tool_calls(response)
+            for call in calls:
+                call["tool"] = self._schema_name_map.get(call["tool"], call["tool"])
             # never re-execute an identical tool call (prevents model tool loops)
             fresh_calls = []
             for call in calls:
@@ -378,8 +392,16 @@ class AgentRuntime:
                 result.fail_class = classify_error(str(exc))
                 return result
         else:
-            result.error = f"exceeded {MAX_TOOL_ROUNDS} tool rounds"
-            result.fail_class = "logic"
+            # exhausted the round budget: keep whatever was produced rather
+            # than discarding real work (a stage that wrote files and ran out
+            # of exploration rounds still counts as done if it has content)
+            last_text = clean_content(response.content or "") if response is not None else ""
+            if last_text:
+                result.content = result.content or last_text
+                result.error = None
+            else:
+                result.error = f"exceeded {MAX_TOOL_ROUNDS} tool rounds"
+                result.fail_class = "logic"
 
         # -- verify step: evidence over claims ------------------------------
         if not result.error:
@@ -517,7 +539,47 @@ class AgentRuntime:
 
         return ModelRequest(model_id=model_id, system=system, messages=messages,
                             project_id=task.project_id, agent_id=self.agent.id,
-                            task_id=task.task_id)
+                            task_id=task.task_id, tools=await self._tool_schemas())
+
+    async def _tool_schemas(self) -> list[dict]:
+        """OpenAI-format schemas for every tool this agent may actually call.
+
+        Real providers (DeepSeek) only use tools they receive here; without
+        schemas the model can only guess tool names in text."""
+        import json
+
+        registry = getattr(self.ctx.services, "tool_registry", None)
+        if registry is None:
+            return []
+        self._schema_name_map = {}
+        schemas = []
+        for tool in await registry.list(enabled_only=True):
+            permission_key = tool.permission_key or tool.name
+            allowed = self.agent.permissions.get(
+                permission_key, "deny" if permission_key in (
+                    "shell", "web.scrape", "api.call", "mcp.call", "deploy",
+                    "github", "postgres.query", "docker", "agent.delegate",
+                    "browser.open", "browser.snapshot", "browser.click",
+                    "browser.type", "browser.screenshot", "browser.evaluate",
+                    "browser.close") else "allow")
+            if allowed == "deny":
+                continue
+            # DeepSeek rejects tool names containing dots — sanitize and map back
+            schema_name = tool.name.replace(".", "_")
+            self._schema_name_map[schema_name] = tool.name
+            params = tool.config.get("parameters")
+            if not isinstance(params, dict):
+                params = {}
+            schemas.append({
+                "type": "function",
+                "function": {
+                    "name": schema_name,
+                    "description": tool.description,
+                    "parameters": {"type": "object", "properties": params,
+                                   "required": list(params.keys())},
+                },
+            })
+        return schemas
 
     async def _track_usage(self, response: ModelResponse, task: Task, result: AgentRunResult) -> None:
         model_def = await self.ctx.router.registry.get(response.model_id)
