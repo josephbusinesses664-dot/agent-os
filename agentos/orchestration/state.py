@@ -22,6 +22,8 @@ class WorkflowState(TypedDict, total=False):
     pending_approval_id: str
     approval_decision: str  # "" | approved | rejected | changes_requested
     approval_note: str
+    # executive go/no-go gate (research -> build transition)
+    exec_gate: dict  # {"verdict": "go" | "nogo", "rationale": str}
     # bookkeeping
     total_steps: int
 
@@ -43,5 +45,6 @@ def new_state(run_id: str, workflow_id: str, project_id: str,
         "pending_approval_id": "",
         "approval_decision": "",
         "approval_note": "",
+        "exec_gate": {},
         "total_steps": 0,
     }

@@ -32,6 +32,25 @@ logger = logging.getLogger("agentos.runtime")
 
 MAX_TOOL_ROUNDS = 6
 TOOL_CALL_RE = re.compile(r"<tool_call>\s*(\{.*?\})\s*</tool_call>", re.DOTALL)
+_STRIP_XML_RE = re.compile(
+    r"(<invoke\s+name=[\"\'][^\"\']+[\"\']\s*(?:/>|>.*?</invoke>)|"
+    r"<tool_call>.*?</tool_call>|<parameter\s+name=[\"\'][^\"\']+[\"\']>.*?</parameter>)",
+    re.DOTALL)
+_STRIP_NUDGE_RE = re.compile(
+    r"\[?(?:STOP using tools|Your tool calls were identical)[^\]]*\]?", re.DOTALL)
+
+
+def clean_content(text: str) -> str:
+    """Strip raw tool-call XML and loop-nudge echoes from agent text so
+    Mattermost/tasks only ever see the agent's actual words."""
+    text = _STRIP_XML_RE.sub("", text or "")
+    text = _STRIP_NUDGE_RE.sub("", text)
+    lines = [l.rstrip() for l in text.splitlines()]
+    while lines and not lines[0].strip():
+        lines.pop(0)
+    while lines and not lines[-1].strip():
+        lines.pop()
+    return "\n".join(lines).strip()
 
 
 @dataclass
@@ -299,18 +318,25 @@ class AgentRuntime:
                 executed_signatures.add(signature)
                 fresh_calls.append(call)
             if not fresh_calls:
-                if calls and duplicate_nudges < 2:
-                    # every call was a duplicate of an already-executed one:
-                    # nudge the model to continue instead of ending with a stub
-                    # (bounded: deterministic/echo models repeat forever)
+                if calls and duplicate_nudges < 3:
                     duplicate_nudges += 1
-                    messages.append({
-                        "role": "user",
-                        "content": ("[Your tool calls were identical to ones already "
-                                    "executed this turn — their results are above. "
-                                    "Continue the work or give your final answer "
-                                    "without tool calls.]"),
-                    })
+                    if duplicate_nudges == 3:
+                        # final warning: no more tools, produce the answer now
+                        messages.append({
+                            "role": "user",
+                            "content": ("[STOP using tools. The tools already returned "
+                                        "their results above. Write your complete final "
+                                        "answer now as plain text — full detail, no tool "
+                                        "calls.]"),
+                        })
+                    else:
+                        messages.append({
+                            "role": "user",
+                            "content": ("[Your tool calls were identical to ones already "
+                                        "executed this turn — their results are above. "
+                                        "Continue the work or give your final answer "
+                                        "without tool calls.]"),
+                        })
                     try:
                         response = await self._call_with_failover(
                             model_id, system, messages, task)
@@ -319,7 +345,7 @@ class AgentRuntime:
                         result.fail_class = classify_error(str(exc))
                         return result
                     continue
-                result.content = response.content or ""
+                result.content = clean_content(response.content or "")
                 break
             result.tool_calls.extend(fresh_calls)
             await ctx.event_bus.publish("agent.tool_calls", {"agent": self.agent.id,

@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Any
+from typing import Any, Optional
 
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, START, StateGraph
@@ -23,6 +23,87 @@ from agentos.domain.models import ApprovalStatus, ProjectStatus, TaskStatus, Wor
 from agentos.orchestration.state import WorkflowState
 
 logger = logging.getLogger("agentos.graph")
+
+
+_RESEARCH_STAGES = {"research", "community", "requirements"}
+_BUILD_STAGES = {"design", "implement-frontend", "implement-backend",
+                 "testing", "security", "review", "deploy"}
+
+
+def _gate_due(stage_id: str, next_stage: str, state: dict) -> bool:
+    return (stage_id in _RESEARCH_STAGES and next_stage in _BUILD_STAGES
+            and not state.get("exec_gate"))
+
+
+def _find_stage_id(stages: list[dict], wanted: str) -> Optional[str]:
+    for s in stages:
+        if s.get("stage_id") == wanted:
+            return wanted
+    return None
+
+
+async def _executive_gate(engine: Any, state: dict, project: Any) -> tuple[str, str]:
+    """Alex reviews the research phase and decides GO (build) or NO-GO (report).
+
+    The department heads bring the evidence; the executive makes the call —
+    the human is not asked. Defaults to GO if the model is unreachable."""
+    from agentos.agents.hierarchy import ORG_AGENTS
+    from agentos.domain.models import ModelRequest
+
+    svc = engine.svc
+    evidence = []
+    for sid in ("understanding", "research", "community", "requirements"):
+        r = state.get("stage_results", {}).get(sid)
+        if r and r.get("output"):
+            evidence.append(f"### {sid}\n{r['output'][:2500]}")
+    body = "\n\n".join(evidence) or "(no stage outputs)"
+    goal = getattr(project, "objective", "") or ""
+    executive = ORG_AGENTS.get("executive")
+    model_def = await svc.model_registry.get("deepseek-pro")
+    model_id = "deepseek-pro"
+    if (model_def is None or not model_def.enabled) and executive is not None:
+        model_id, _reason = await svc.router.route(executive, None, description=goal)
+        model_def = await svc.model_registry.get(model_id) if model_id else None
+    provider = svc.providers.get(model_def.provider) if model_def else None
+    verdict, rationale = "go", ""
+    if provider is not None:
+        try:
+            req = ModelRequest(
+                model_id=model_id,
+                system=("You are Alex, the Executive Director of an AI agency. Your "
+                        "department heads have finished the research phase of a project "
+                        "and brought you the evidence. Review it and decide whether to "
+                        "commit the whole organization to BUILDING the product. Reply "
+                        "with exactly GO or NO-GO on the first line, then one sentence "
+                        "of rationale."),
+                messages=[{"role": "user", "content":
+                           f"Goal: {goal}\n\nResearch evidence:\n{body}"}],
+                agent_id="executive", temperature=0.2, max_tokens=200)
+            resp = await provider.complete(req)
+            text = (resp.content or "").strip()
+            lines = [l.strip() for l in text.splitlines() if l.strip()]
+            first = lines[0].upper() if lines else ""
+            if first.startswith("GO"):
+                verdict = "go"
+            elif first.startswith("NO"):
+                verdict = "nogo"
+            if len(lines) > 1:
+                rationale = " ".join(lines[1:])
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("executive gate call failed: %s — defaulting to GO", exc)
+    mm = getattr(svc, "mattermost", None)
+    if mm is not None and mm.available:
+        line = ("🧭 **Alex's decision after research: "
+                f"{'GO — committing to build.' if verdict == 'go' else 'NO-GO — stopping before build.'}"
+                + (f" {rationale}" if rationale else ""))
+        try:
+            await mm.post_to("executive", line)
+            home = mm._project_channels.get(state.get("project_id", ""))
+            if home and home != "executive":
+                await mm.post_to(home, line)
+        except Exception:  # noqa: BLE001
+            logger.exception("executive gate post failed")
+    return verdict, rationale
 
 
 def _stage_by_id(state: dict, stage_id: str) -> dict:
@@ -149,13 +230,21 @@ async def step(engine: Any, state: dict) -> dict:
 
     next_stage = stage.get("next")
     if next_stage:
+        if _gate_due(stage_id, next_stage, state):
+            verdict, rationale = await _executive_gate(engine, state, project)
+            state["exec_gate"] = {"verdict": verdict, "rationale": rationale}
+            if verdict == "nogo":
+                # skip the build phase entirely; go straight to the report
+                next_stage = _find_stage_id(state["stages"], "report") or next_stage
         state["current_stage"] = next_stage
-        return {"stage_results": results, "action": "continue", "current_stage": next_stage}
+        return {"stage_results": results, "action": "continue", "current_stage": next_stage,
+                "exec_gate": state.get("exec_gate", {})}
     state["status"] = "completed"
     await svc.projects.set_status(project.project_id, ProjectStatus.COMPLETED)
     await svc.events.publish("workflow.completed", {"workflow": state["workflow_id"], "run": run_id},
                              project_id=project.project_id, source="orchestrator")
-    return {"stage_results": results, "action": "complete", "status": "completed"}
+    return {"stage_results": results, "action": "complete", "status": "completed",
+            "exec_gate": state.get("exec_gate", {})}
 
 
 async def _task_for_stage(svc: Any, project: Any, stage: dict, result: dict):

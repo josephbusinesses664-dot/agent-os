@@ -192,6 +192,22 @@ class OrchestratorEngine:
                                branch, exc)
         return kept
 
+    def _prior_stage_context(self, run_id: str, stage_id: str) -> str:
+        """Prior stage outputs, so a stage agent never starts from nothing."""
+        run = self._active_runs.get(run_id)
+        if not run:
+            return ""
+        results = run.get("state", {}).get("stage_results", {})
+        parts = []
+        for sid, res in results.items():
+            if sid == stage_id or sid.startswith("__"):
+                continue
+            output = (res.get("output") or "").strip()
+            if not output:
+                continue
+            parts.append(f"## {sid}\n{output[:3000]}")
+        return "\n\n".join(parts)
+
     async def run_workflow(self, workflow_id: str, project_id: str,
                            entry_stage: Optional[str] = None) -> dict:
         workflow = await self.svc.workflow_registry.get(workflow_id)
@@ -274,9 +290,14 @@ class OrchestratorEngine:
             result.error = f"stage agent {stage.agent_role} unavailable"
             return result
 
+        description = stage.description or f"Execute workflow stage {stage.name}."
+        context = self._prior_stage_context(run_id, stage.stage_id)
+        if context:
+            description = (description + "\n\n=== WORK COMPLETED SO FAR (read this before "
+                           "touching tools) ===\n" + context)
         task = await self.svc.tasks.create(
             project.project_id, title=f"{stage.name} ({stage.stage_id})",
-            description=stage.description or f"Execute workflow stage {stage.name}.",
+            description=description,
             assigned_agent=agent.id, created_by="orchestrator",
             priority="high" if stage.requires_approval else "normal",
         )
