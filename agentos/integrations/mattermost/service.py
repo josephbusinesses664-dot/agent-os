@@ -35,6 +35,15 @@ CHANNEL_LAYOUT: dict[str, str] = {
     "monitoring": "Health and monitoring",
     "security": "Security events",
     "deployments": "Deployment activity",
+    "branch-executive": "Executive branch — internal chatter",
+    "branch-product": "Product branch — internal chatter",
+    "branch-engineering": "Engineering branch — internal chatter",
+    "branch-design": "Design branch — internal chatter",
+    "branch-research": "Research branch — internal chatter",
+    "branch-marketing": "Marketing branch — internal chatter",
+    "branch-sales": "Sales branch — internal chatter",
+    "branch-qa": "QA & Security branch — internal chatter",
+    "branch-operations": "Operations branch — internal chatter",
 }
 
 STATUS_EMOJI = {
@@ -60,8 +69,9 @@ EVENT_CHANNEL: dict[str, str] = {
 
 
 def format_identity(agent: AgentDef, model: Optional[str] = None) -> str:
-    badge = model or agent.model_policy.get("tier", "t2").upper()
-    return f"[{badge} • {agent.name}]"
+    from agentos.agents.personas import PERSONAS
+    persona = PERSONAS.get(agent.id, agent.name)
+    return f"[{persona} • {agent.name}]"
 
 
 class MattermostService:
@@ -76,6 +86,8 @@ class MattermostService:
         self.available = False
         self._paused_agents: set[str] = set()
         self._last_post_ts: dict[str, int] = {}
+        self._user_clients: dict[str, Any] = {}  # username -> MattermostClient
+        self.agent_user_ids: set[str] = set()  # ids of the 41 agent accounts
 
     # -- lifecycle ----------------------------------------------------------
     async def connect(self) -> bool:
@@ -84,6 +96,13 @@ class MattermostService:
             self.bot_user_id = me.get("id")
             self.available = True
             logger.info("mattermost connected as %s", me.get("username"))
+            # collect the agent accounts' user ids so the listener never
+            # mistakes an agent's own post for a human message
+            from agentos.agents.personas import USERNAMES
+            for uname in set(USERNAMES.values()):
+                user = await self.client.get_user_by_username(uname)
+                if user:
+                    self.agent_user_ids.add(user["id"])
             return True
         except Exception as exc:  # noqa: BLE001
             self.available = False
@@ -106,6 +125,14 @@ class MattermostService:
                     self.team_id, name, name.replace("-", " ").title(), purpose)
             self.channels[name] = channel["id"]
 
+        # register the team's default channels too, so the listener polls them
+        for extra in ("town-square", "general", "off-topic"):
+            if extra in self.channels:
+                continue
+            channel = await self.client.get_channel_by_name(self.team_id, extra)
+            if channel is not None:
+                self.channels[extra] = channel["id"]
+
     async def ensure_project_channels(self, project_id: str, project_name: str) -> dict[str, str]:
         """Create per-project channels (projects/<project-id>) if missing."""
         if not self.available:
@@ -125,6 +152,20 @@ class MattermostService:
         return {name: self.channels[name] for name in names}
 
     # -- posting ------------------------------------------------------------
+    async def post_as_user(self, username: str, token: str, message: str,
+                           channel: str) -> Optional[str]:
+        """Post as a specific agent's own Mattermost account (per-user PAT)."""
+        client = self._user_clients.get(username)
+        if client is None:
+            client = MattermostClient(self.client.base_url, token)
+            self._user_clients[username] = client
+        try:
+            post = await client.post(self._channel_id(channel), message)
+            return post.get("id")
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("post as %s failed: %s", username, exc)
+            return None
+
     async def post_as_agent(self, agent: AgentDef, message: str,
                             channel: str = "agent-status",
                             model: Optional[str] = None,
@@ -132,6 +173,13 @@ class MattermostService:
         if not self.available:
             logger.info("[post skipped, mattermost down] %s: %s", agent.name, message[:120])
             return None
+        # post under the agent's own account when its PAT is configured
+        from agentos.agents.personas import token_for_agent, username_for
+        token = token_for_agent(agent.id)
+        if token:
+            post = await self.post_as_user(username_for(agent.id), token, message, channel)
+            if post:
+                return post
         identity = format_identity(agent, model)
         text = f"{identity}\n{message}"
         try:
@@ -231,23 +279,51 @@ class MattermostService:
     def is_paused(self, agent_id: str) -> bool:
         return agent_id in self._paused_agents
 
+    WORK_TRIGGERS = ("build", "create", "make", "plan", "launch", "run",
+                     "write", "research", "generate", "implement", "fix",
+                     "design", "test", "deploy", "refactor", "analyze",
+                     "i want", "i need", "can you", "please", "kick off")
+
+    def _looks_like_work(self, text: str) -> bool:
+        low = text.lower()
+        return low.startswith(self.WORK_TRIGGERS)
+
+    def _logical_for(self, channel_id: str) -> str:
+        """Reverse-lookup the logical channel name for a channel id."""
+        for name, cid in self.channels.items():
+            if cid == channel_id:
+                return name
+        return self.settings.mattermost_channel
+
     async def handle_message(self, message: dict, engine: Any, svc: Any) -> None:
-        """Process a human message: @agent commands, approvals, or a new goal."""
+        """Process a human message: @agent commands, approvals, a new goal
+        (explicit work requests), or plain chat handled by the executive."""
         text = (message.get("message") or "").strip()
         if not text or message.get("user_id") == self.bot_user_id:
             return
+        if message.get("user_id") in self.agent_user_ids:
+            return  # an agent's own post — never re-process as a human message
         if text.startswith("@agent"):
             await self._handle_command(text, message, engine, svc)
             return
         if text.startswith(("@approve", "@reject", "@changes")):
             await self._handle_approval(text, message, svc)
             return
-        # otherwise: treat a message in the general channel as a goal
         if self.on_command:
-            await self.on_command({
-                "type": "goal", "text": text, "user_id": message.get("user_id", "human"),
-                "channel": message.get("channel_id", ""),
-            })
+            if self._looks_like_work(text):
+                # explicit work request -> the orchestrator runs it
+                await self.on_command({
+                    "type": "goal", "text": text,
+                    "user_id": message.get("user_id", "human"),
+                    "channel": message.get("channel_id", ""),
+                })
+            else:
+                # casual chat -> the executive answers as a person
+                await self.on_command({
+                    "type": "chat", "text": text,
+                    "user_id": message.get("user_id", "human"),
+                    "channel": message.get("channel_id", ""),
+                })
 
     async def _handle_command(self, text: str, message: dict, engine: Any, svc: Any) -> None:
         parts = text.split()

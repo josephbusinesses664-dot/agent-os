@@ -14,8 +14,9 @@ from agentos.domain.models import AgentMessage, MessageType
 
 
 class MessageBus:
-    def __init__(self, store: EntityStore) -> None:
+    def __init__(self, store: EntityStore, mirror: Any = None) -> None:
         self.store = store
+        self.mirror = mirror  # async (AgentMessage) -> None, best-effort
         self._collection = "messages"
 
     async def send(self, message_type: MessageType | str, sender: str, recipient: str,
@@ -34,6 +35,11 @@ class MessageBus:
             response_to=response_to,
         )
         await self.store.save(self._collection, msg)
+        if self.mirror is not None:
+            try:
+                await self.mirror(msg)
+            except Exception:  # noqa: BLE001 — the mirror must never break the bus
+                pass
         return msg
 
     async def inbox(self, recipient: str, unread_only: bool = True, limit: int = 50) -> list[AgentMessage]:

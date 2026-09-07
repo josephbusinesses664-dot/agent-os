@@ -167,7 +167,12 @@ async def _h_project_state(ctx: Any, args: dict) -> dict:
 async def _h_mattermost_post(ctx: Any, args: dict) -> dict:
     if ctx.services.mattermost is None:
         return {"ok": False, "error": "mattermost not configured"}
-    channel = args.get("channel", "agent-status")
+    channel = args.get("channel") or ""
+    if not channel and getattr(ctx, "agent", None):
+        from agentos.agents.personas import branch_channel_for
+        channel = branch_channel_for(ctx.agent.id)
+    if not channel:
+        channel = "agent-status"
     message = args.get("message", "")
     await ctx.services.mattermost.post_as_agent(ctx.agent, message, channel=channel)
     return {"ok": True, "channel": channel}

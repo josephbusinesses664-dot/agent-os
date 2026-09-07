@@ -24,3 +24,5 @@ workspace/
 # build
 dist/
 build/
+# per-agent mattermost tokens
+agent-tokens.env

@@ -56,9 +56,17 @@ class OrchestratorEngine:
     # Public entry points
     # ------------------------------------------------------------------
     async def execute_goal(self, goal: str, user_id: str = "human",
-                           workflow_id: str = "zero_to_hundred",
+                           workflow_id: Optional[str] = None,
                            project_name: Optional[str] = None) -> dict:
-        """Executive flow: create a project and run a workflow on it."""
+        """Executive flow: create a project and run a workflow on it.
+
+        By default the executive plans dynamically (keyword-scored stages,
+        filtered by the branch directors) instead of blindly running the full
+        0→100 pipeline. Pass a workflow_id to pin a fixed workflow."""
+        if workflow_id is None:
+            result = await self.execute_dynamic(goal, user_id=user_id)
+            result["project_name"] = result.get("project_name", "")
+            return result
         name = project_name or _slug(goal)[:60] or "New Project"
         project = await self.svc.projects.create(name, objective=goal, created_by=user_id,
                                                  workflow_id=workflow_id)
@@ -74,10 +82,17 @@ class OrchestratorEngine:
         """Autonomous planning: the planner selects the required stages from
         the goal (explicit PLANNED_STAGES marker, keyword scoring, or the full
         pipeline on request), then runs them through the same engine."""
+        from agentos.planning import _parse_marker
+        chosen = stages
+        if chosen is None and not expand_full and not _parse_marker(goal):
+            # the executive plans, then each branch director decides which of
+            # their team's stages are actually needed for this goal
+            chosen = await self._director_filter(
+                goal, self.svc.planner.plan_stages(goal))
         plan = self.svc.planner.plan_summary(goal) if stages is None else {
             "stages": stages, "count": len(stages)}
-        workflow = self.svc.planner.build_workflow(goal, stages=stages) \
-            if stages is not None else self.svc.planner.build_workflow(goal)
+        workflow = self.svc.planner.build_workflow(goal, stages=chosen) \
+            if chosen is not None else self.svc.planner.build_workflow(goal)
         if expand_full and stages is None:
             workflow = self.svc.planner.build_workflow(
                 goal, stages=self.svc.planner.plan_stages(goal, expand_full=True))
@@ -92,6 +107,83 @@ class OrchestratorEngine:
         run = await self.run_workflow_obj(workflow, project.project_id)
         return {"project_id": project.project_id, "run_id": run["run_id"],
                 "status": run["status"], "planned_stages": plan["stages"]}
+
+    _BRANCH_DIRECTORS = {
+        "executive": "executive", "product": "product-director",
+        "engineering": "cto", "design": "design-director",
+        "research": "research-director", "marketing": "marketing-director",
+        "sales": "sales-director", "qa": "qa-director",
+        "operations": "operations-director",
+    }
+
+    async def _director_filter(self, goal: str, stages: list[str]) -> list[str]:
+        """Hierarchy gate: each branch director keeps only the stages their
+        team genuinely needs for this goal. The executive plans; directors
+        decide who inside their branch gets activated. Never breaks a run —
+        on any failure the planned stages are kept."""
+        import re as _re
+
+        from agentos.agents.hierarchy import ORG_AGENTS
+        from agentos.agents.personas import BRANCH_OF
+        from agentos.domain.models import ModelRequest
+
+        kept = list(stages)
+        templates = self.svc.planner._load_templates()
+        branch_stages: dict[str, list[str]] = {}
+        for sid in stages:
+            if sid in ("understanding", "report"):
+                continue
+            role = templates.get(sid, {}).get("agent_role", "")
+            branch = BRANCH_OF.get(role)
+            if branch:
+                branch_stages.setdefault(branch, []).append(sid)
+        for branch, sids in branch_stages.items():
+            director_id = self._BRANCH_DIRECTORS.get(branch)
+            director = ORG_AGENTS.get(director_id) if director_id else None
+            if director is None:
+                continue
+            try:
+                model_def = await self.svc.model_registry.get("deepseek-pro")
+                model_id = "deepseek-pro"
+                if model_def is None or not model_def.enabled:
+                    model_id, _reason = await self.svc.router.route(
+                        director, None, description=goal)
+                    model_def = await self.svc.model_registry.get(model_id) if model_id else None
+                provider = self.svc.providers.get(model_def.provider) if model_def else None
+                if provider is None:
+                    continue
+                listing = "; ".join(
+                    f"{sid} ({templates.get(sid, {}).get('name', sid)})"
+                    for sid in sids)
+                system = (
+                    "You are a department director in an AI agency. The executive "
+                    "planned these stages for YOUR team for one goal. Keep only the "
+                    "stages genuinely needed for this goal — your agents must not do "
+                    "busywork like reviewing or testing things that were never built. "
+                    "Reply with a comma-separated list of the stage ids you keep, or "
+                    "the single word NONE.")
+                req = ModelRequest(model_id=model_id, system=system,
+                                   messages=[{"role": "user", "content":
+                                              f"Goal: {goal}\nYour team's planned "
+                                              f"stages: {listing}"}],
+                                   agent_id=director.id, temperature=0.1,
+                                   max_tokens=300)
+                resp = await provider.complete(req)
+                text = (resp.content or "").strip().lower()
+                tokens = set(_re.split(r"[^a-z0-9_-]+", text))
+                matched = {sid for sid in sids if sid in tokens}
+                if "none" in tokens:
+                    for sid in sids:
+                        kept.remove(sid)
+                elif matched:
+                    for sid in sids:
+                        if sid not in matched:
+                            kept.remove(sid)
+                # unparseable answer: keep the planned stages (fail open)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("director gate failed for branch %s: %s — keeping stages",
+                               branch, exc)
+        return kept
 
     async def run_workflow(self, workflow_id: str, project_id: str,
                            entry_stage: Optional[str] = None) -> dict:
@@ -213,6 +305,28 @@ class OrchestratorEngine:
             span.cost = outcome.cost
             span.result_summary = (outcome.content or "")[:200]
             await span_cm.__aexit__(None, None, None)
+
+        # mirror the agent's full response into its branch channel so the
+        # humans can read the actual work (PRDs, briefs, reports, arguments)
+        mm = getattr(self.svc, "mattermost", None)
+        if mm is not None and mm.available and outcome.content:
+            try:
+                from agentos.agents.personas import (branch_channel_for,
+                                                     token_for_agent, username_for)
+                label = f"**[{stage.stage_id.upper()} — {stage.name}]**\n"
+                body = outcome.content
+                if len(body) > 16000:
+                    body = body[:16000] + "\n…(truncated at platform limit)"
+                token = token_for_agent(agent.id)
+                if token:
+                    await mm.post_as_user(username_for(agent.id), token,
+                                          label + body,
+                                          branch_channel_for(agent.id))
+                else:
+                    await mm.post_as_agent(agent, label + body,
+                                           channel=branch_channel_for(agent.id))
+            except Exception:  # noqa: BLE001
+                logger.exception("stage report mirror failed")
 
         # persist artifacts against the task + project
         for artifact in outcome.artifacts:

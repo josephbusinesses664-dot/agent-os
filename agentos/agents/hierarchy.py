@@ -15,6 +15,13 @@ from agentos.agents.identities import identity_for
 from agentos.domain.models import AgentDef
 
 
+_EXEC_IDS = {
+    "executive", "chief-of-staff",
+    "product-director", "cto", "design-director", "research-director",
+    "marketing-director", "sales-director", "qa-director", "operations-director",
+}
+
+
 def _agent(
     agent_id: str,
     name: str,
@@ -56,6 +63,9 @@ def _agent(
         "browser.close": "deny",
     }
     perms.update(extra_permissions or {})
+    # execs (executive office + department directors) think with deepseek-pro;
+    # every specialist below them works on deepseek-flash
+    preferred = ("deepseek-pro" if agent_id in _EXEC_IDS else "deepseek-flash")
     return AgentDef(
         id=agent_id,
         name=name,
@@ -65,7 +75,7 @@ def _agent(
         allowed_children=children,
         skills=skills,
         tools=tools,
-        model_policy={"tier": tier, "preferred_models": [], "max_tier": "t3"},
+        model_policy={"tier": tier, "preferred_models": [preferred], "max_tier": "t3"},
         permissions=perms,
         risk_level=risk,
         identity=identity_for(agent_id),

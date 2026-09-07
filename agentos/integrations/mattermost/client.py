@@ -78,13 +78,19 @@ class MattermostClient:
 
     async def posts_after(self, channel_id: str, since: int) -> list[dict]:
         resp = await self._get("/api/v4/channels/{}/posts".format(channel_id),
-                               params={"since": since, "per_page": 200})
+                               params={"since": since * 1000, "per_page": 200})
         order = resp.get("order", [])
         posts = resp.get("posts", {})
         return [posts[pid] for pid in order if pid in posts]
 
     async def get_post(self, post_id: str) -> dict:
         return await self._get(f"/api/v4/posts/{post_id}")
+
+    async def get_user_by_username(self, username: str) -> Optional[dict]:
+        try:
+            return await self._get(f"/api/v4/users/username/{username}")
+        except Exception:  # noqa: BLE001
+            return None
 
     # -- reactions ----------------------------------------------------------
     async def react(self, post_id: str, emoji: str) -> None:

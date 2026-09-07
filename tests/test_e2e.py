@@ -12,13 +12,7 @@ async def test_full_zero_to_hundred_pipeline(svc):
         workflow_id="zero_to_hundred",
     )
     run = await svc.engine.run_workflow("zero_to_hundred", project.project_id)
-    assert run["status"] == "awaiting_approval"  # deployment gate pauses
-
-    # human approves the deployment gate
-    pending = await svc.approvals.pending()
-    assert len(pending) == 1
-    run = await svc.engine.approve(pending[0].approval_id, "approved", decided_by="e2e")
-    assert run["status"] == "completed"
+    assert run["status"] == "completed"  # greenlit: no deployment gate
 
     stages = run["stage_results"]
     expected = {"understanding", "discovery", "community_intelligence", "opportunity",
@@ -46,8 +40,6 @@ async def test_full_zero_to_hundred_pipeline(svc):
     types = {e.type for e in events}
     assert "workflow.started" in types
     assert "workflow.completed" in types
-    assert "approval.requested" in types
-    assert "approval.granted" in types
     assert "stage.completed" in types
     assert "model.completed" in types
 

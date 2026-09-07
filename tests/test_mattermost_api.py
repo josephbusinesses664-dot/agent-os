@@ -41,11 +41,14 @@ class FakeMmClient:
     async def posts_after(self, channel_id, since):
         return []
 
+    async def get_user_by_username(self, username):
+        return None
+
 
 def test_identity_formatting():
     agent = AgentDef(id="cto", name="CTO", role="technology")
-    assert format_identity(agent, "claude-sonnet-4-5") == "[claude-sonnet-4-5 • CTO]"
-    assert format_identity(agent) == "[T2 • CTO]"
+    assert format_identity(agent, "claude-sonnet-4-5") == "[Jordan • CTO]"
+    assert format_identity(agent) == "[Jordan • CTO]"
 
 
 @pytest.mark.asyncio
@@ -79,7 +82,7 @@ async def test_mattermost_agent_posting(svc):
     agent = await svc.agent_registry.get("cto")
     await service.post_as_agent(agent, "Architecture completed.", model="claude-sonnet-4-5")
     assert client.posts
-    assert "[claude-sonnet-4-5 • CTO]" in client.posts[0]["message"]
+    assert "[Jordan • CTO]" in client.posts[0]["message"]
 
 
 @pytest.mark.asyncio
@@ -95,19 +98,16 @@ async def test_mattermost_approval_command(svc):
     await service.connect()
     await service.ensure_workspace()
 
-    # create a paused workflow, then approve it from a Mattermost message
-    project = await svc.projects.create("MM", "obj", workflow_id="build_feature")
-    run = await svc.engine.run_workflow("build_feature", project.project_id)
-    pending = await svc.approvals.pending()
-    approval_id = pending[0].approval_id
+    # create an approval manually, then approve it from a Mattermost message
+    approval = await svc.approvals.request(
+        "cto", "CTO", "deploy", risk_level="high", reason="manual")
+    approval_id = approval.approval_id
 
     await service.handle_message({"message": f"@agent approve {approval_id}",
                                   "user_id": "human-1"}, svc.engine, svc)
     refreshed = await svc.approvals.get(approval_id)
     assert refreshed.status.value == "approved"
-    # the run resumed to completion
-    saved = svc.engine._active_runs[run["run_id"]]["state"]
-    assert saved["status"] == "completed"
+    assert refreshed.decided_by == "human"
 
 
 @pytest.mark.asyncio

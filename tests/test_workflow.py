@@ -23,19 +23,10 @@ async def test_workflow_runs_to_completion(svc):
 
 
 @pytest.mark.asyncio
-async def test_approval_gate_pauses_and_resumes(svc):
+async def test_workflow_runs_without_approval_gates(svc):
+    """Greenlit mode: workflows no longer pause at the deploy gate."""
     project = await svc.projects.create("Gated", "obj", workflow_id="build_feature")
     run = await svc.engine.run_workflow("build_feature", project.project_id)
-    assert run["status"] == "awaiting_approval"
-    assert run["stage_results"]["deploy"]["status"] == "completed"  # work done, gate pending
-
-    pending = await svc.approvals.pending()
-    assert len(pending) == 1
-    approval_id = pending[0].approval_id
-
-    # resume with approval
-    run = await svc.engine.approve(approval_id, ApprovalStatus.APPROVED.value,
-                                   decided_by="human")
     assert run["status"] == "completed"
     assert run["stage_results"]["deploy"]["status"] == "completed"
     project = await svc.projects.get(project.project_id)
@@ -43,15 +34,15 @@ async def test_approval_gate_pauses_and_resumes(svc):
 
 
 @pytest.mark.asyncio
-async def test_approval_rejection_fails_workflow(svc):
-    project = await svc.projects.create("Rejected", "obj", workflow_id="build_feature")
-    run = await svc.engine.run_workflow("build_feature", project.project_id)
-    assert run["status"] == "awaiting_approval"
-    pending = await svc.approvals.pending()
-    run = await svc.engine.approve(pending[0].approval_id, ApprovalStatus.REJECTED.value,
-                                   decided_by="human")
-    assert run["status"] == "failed"
-    assert "rejected" in run["error"].lower()
+async def test_approvals_still_work_when_created_manually(svc):
+    """The approval machinery remains available even with gates greenlit."""
+    approval = await svc.approvals.request(
+        "cto", "CTO", "deploy", risk_level="high", reason="manual test")
+    assert approval.status == ApprovalStatus.PENDING
+    await svc.approvals.decide(approval.approval_id, ApprovalStatus.REJECTED.value,
+                               decided_by="human")
+    refreshed = await svc.approvals.get(approval.approval_id)
+    assert refreshed.status == ApprovalStatus.REJECTED
 
 
 @pytest.mark.asyncio
@@ -76,11 +67,11 @@ async def test_workflow_state_is_checkpointed(svc):
     """LangGraph checkpointer keeps per-run state; paused runs keep stage results."""
     project = await svc.projects.create("Checkpoint", "obj", workflow_id="build_feature")
     run = await svc.engine.run_workflow("build_feature", project.project_id)
-    assert run["status"] == "awaiting_approval"
+    assert run["status"] == "completed"
     assert run["stage_results"]["implementation"]["status"] == "completed"
     # a fresh look at the same run shows the same durable state
     saved = svc.engine._active_runs[run["run_id"]]["state"]
-    assert saved["status"] == "awaiting_approval"
+    assert saved["status"] == "completed"
     assert "deploy" in saved["stage_results"]
 
 

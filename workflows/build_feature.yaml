@@ -56,5 +56,5 @@ stages:
       Deploy the feature (staging). Production requires approval. Write the
       deployment report to artifacts/feature-deploy.md.
       PLANNED_TOOL_CALLS: [{"tool":"filesystem.write","args":{"path":"artifacts/feature-deploy.md","content":"AUTO"}}]
-    requires_approval: true
+    requires_approval: false
     depends_on: [review]

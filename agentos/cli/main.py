@@ -472,7 +472,8 @@ def approvals(action: str = typer.Argument(..., help="list | approve | reject"),
                 typer.echo(f"  {a.approval_id:<18} {a.status.value:<12} {a.risk_level:<6} "
                            f"{a.action:<32} {a.agent_name}")
         elif action in ("approve", "reject"):
-            await svc.engine.approve(approval_id or "", action, decided_by="cli")
+            decision = {"approve": "approved", "reject": "rejected"}[action]
+            await svc.engine.approve(approval_id or "", decision, decided_by="cli")
             typer.echo(f"{action}d {approval_id}")
 
     _run(_main())

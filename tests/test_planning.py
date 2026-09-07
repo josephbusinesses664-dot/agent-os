@@ -98,16 +98,8 @@ async def test_execute_dynamic_full_pipeline_available(svc):
         "launch a full saas product", user_id="test-human", expand_full=True)
     assert len(run["planned_stages"]) >= 10, run["planned_stages"]
     assert "deploy" in run["planned_stages"]
-    # the full pipeline correctly halts at the deploy approval gate
-    assert run["status"] == "awaiting_approval", run
-    from agentos.domain.models import ApprovalStatus
-
-    pending = await svc.approvals.pending()
-    assert pending, "a deploy approval must be pending"
-    final = await svc.engine.approve(pending[0].approval_id,
-                                     ApprovalStatus.APPROVED.value,
-                                     decided_by="test-human")
-    assert final["status"] == "completed", final
+    # greenlit: the full pipeline runs straight through to completion
+    assert run["status"] == "completed", run
 
 
 @pytest.mark.asyncio
