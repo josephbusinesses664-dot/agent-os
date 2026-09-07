@@ -1,5 +1,10 @@
 # Agent OS — the Unified AI Agency / Agent Operating System
 
+> **📍 Project home moved:** this project now lives at
+> **[agent_os2](https://github.com/josephbusinesses664-dot/agent_os2)** —
+> the new canonical repository. All new development, upgrades and features
+> land there. This repo (agent-os) is legacy. See [NOTES.md](NOTES.md).
+
 A multi-agent platform where you talk to an entire organization of AI agents
 through **Mattermost**. Agents collaborate, delegate, spawn sub-agents, use
 skills and MCP tools, route work to the right models, respect budgets, ask
