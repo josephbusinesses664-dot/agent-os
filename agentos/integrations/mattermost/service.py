@@ -1,0 +1,314 @@
+"""Mattermost Service.
+
+Makes Mattermost the human-facing interface of the AI organization:
+
+* programmatically creates the workspace channel layout,
+* posts with the *internal agent identity layer* — one bot account, many
+  agent identities (`[AGENT • ROLE]`),
+* routes system events to the right channels,
+* handles human override commands (@agent …) and approval commands.
+
+Graceful degradation: if Mattermost is unreachable the system keeps running;
+every post attempt is logged, not fatal.
+"""
+
+from __future__ import annotations
+
+import logging
+from typing import Any, Callable, Optional
+
+from agentos.config import Settings
+from agentos.domain.models import AgentDef, Event
+from agentos.integrations.mattermost.client import MattermostClient
+
+logger = logging.getLogger("agentos.mattermost")
+
+CHANNEL_LAYOUT: dict[str, str] = {
+    "announcements": "Organization announcements",
+    "executive": "Executive updates and briefings",
+    "decisions": "Recorded decisions",
+    "approvals": "Human approval requests",
+    "agent-status": "Live agent activity and status",
+    "agent-logs": "Agent task results and reports",
+    "agent-discussion": "Inter-agent discussion feed",
+    "system-errors": "Errors, retries and failures",
+    "monitoring": "Health and monitoring",
+    "security": "Security events",
+    "deployments": "Deployment activity",
+}
+
+STATUS_EMOJI = {
+    "idle": "⚪", "working": "🟢", "awaiting_review": "🟡", "awaiting_approval": "🟠",
+    "blocked": "🟠", "failed": "🔴", "paused": "⏸️", "offline": "⚫",
+}
+
+EVENT_CHANNEL: dict[str, str] = {
+    "approval.requested": "approvals",
+    "approval.granted": "approvals",
+    "approval.rejected": "approvals",
+    "workflow.failed": "system-errors",
+    "task.failed": "system-errors",
+    "agent.failed": "system-errors",
+    "deployment.started": "deployments",
+    "deployment.completed": "deployments",
+    "deployment.failed": "deployments",
+    "model.failover": "system-errors",
+    "budget.warning": "executive",
+    "workflow.completed": "announcements",
+    "project.created": "announcements",
+}
+
+
+def format_identity(agent: AgentDef, model: Optional[str] = None) -> str:
+    badge = model or agent.model_policy.get("tier", "t2").upper()
+    return f"[{badge} • {agent.name}]"
+
+
+class MattermostService:
+    def __init__(self, settings: Settings, client: MattermostClient,
+                 on_command: Optional[Callable] = None) -> None:
+        self.settings = settings
+        self.client = client
+        self.on_command = on_command  # async (dict) -> None
+        self.channels: dict[str, str] = {}  # logical name -> channel id
+        self.team_id: Optional[str] = None
+        self.bot_user_id: Optional[str] = None
+        self.available = False
+        self._paused_agents: set[str] = set()
+        self._last_post_ts: dict[str, int] = {}
+
+    # -- lifecycle ----------------------------------------------------------
+    async def connect(self) -> bool:
+        try:
+            me = await self.client.me()
+            self.bot_user_id = me.get("id")
+            self.available = True
+            logger.info("mattermost connected as %s", me.get("username"))
+            return True
+        except Exception as exc:  # noqa: BLE001
+            self.available = False
+            logger.warning("mattermost unavailable: %s", exc)
+            return False
+
+    async def ensure_workspace(self) -> None:
+        """Create team + channels per the logical workspace organization."""
+        if not self.available:
+            return
+        team = await self.client.get_team_by_name(self.settings.mattermost_team)
+        if team is None:
+            team = await self.client.create_team(self.settings.mattermost_team,
+                                                 "AI Organization")
+        self.team_id = team["id"]
+        for name, purpose in CHANNEL_LAYOUT.items():
+            channel = await self.client.get_channel_by_name(self.team_id, name)
+            if channel is None:
+                channel = await self.client.create_channel(
+                    self.team_id, name, name.replace("-", " ").title(), purpose)
+            self.channels[name] = channel["id"]
+
+    async def ensure_project_channels(self, project_id: str, project_name: str) -> dict[str, str]:
+        """Create per-project channels (projects/<project-id>) if missing."""
+        if not self.available:
+            return {}
+        prefix = f"project-{project_id[:8]}"
+        names = {
+            f"{prefix}": f"{project_name}",
+            f"{prefix}-updates": f"{project_name} — updates",
+            f"{prefix}-reviews": f"{project_name} — reviews",
+        }
+        for name, display in names.items():
+            if name not in self.channels:
+                channel = await self.client.get_channel_by_name(self.team_id, name)
+                if channel is None:
+                    channel = await self.client.create_channel(self.team_id, name, display)
+                self.channels[name] = channel["id"]
+        return {name: self.channels[name] for name in names}
+
+    # -- posting ------------------------------------------------------------
+    async def post_as_agent(self, agent: AgentDef, message: str,
+                            channel: str = "agent-status",
+                            model: Optional[str] = None,
+                            root_id: Optional[str] = None) -> Optional[str]:
+        if not self.available:
+            logger.info("[post skipped, mattermost down] %s: %s", agent.name, message[:120])
+            return None
+        identity = format_identity(agent, model)
+        text = f"{identity}\n{message}"
+        try:
+            post = await self.client.post(self._channel_id(channel), text, root_id=root_id)
+            return post.get("id")
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("mattermost post failed: %s", exc)
+            return None
+
+    def _channel_id(self, name: str) -> str:
+        if name in self.channels:
+            return self.channels[name]
+        return self.channels.get(self.settings.mattermost_channel) or ""
+
+    async def post_to(self, channel: str, message: str) -> Optional[str]:
+        if not self.available:
+            return None
+        try:
+            post = await self.client.post(self._channel_id(channel), message)
+            return post.get("id")
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("mattermost post to %s failed: %s", channel, exc)
+            return None
+
+    async def post_status(self, agents: list[AgentDef], instances: list[Any]) -> None:
+        """Post a compact live status board to agent-status."""
+        lines = ["**AI AGENCY — AGENT STATUS**"]
+        by_id = {a.id: a for a in agents}
+        status_map = {i.agent_id: i for i in instances}
+        for agent in agents:
+            inst = status_map.get(agent.id)
+            if inst is None:
+                continue
+            emoji = STATUS_EMOJI.get(inst.status.value, "⚪")
+            detail = f" — {inst.latest_action[:60]}" if inst.latest_action else ""
+            lines.append(f"{emoji} **{agent.name}** ({agent.role}){detail}")
+        await self.post_to("agent-status", "\n".join(lines))
+
+    async def post_approval(self, approval: Any, run_id: str = "") -> None:
+        if not self.available:
+            return
+        header = "⚠️ **APPROVAL REQUIRED**"
+        text = (
+            f"{header}\n\n"
+            f"**Agent:** {approval.agent_name}\n"
+            f"**Action:** {approval.action}\n"
+            f"**Risk:** {approval.risk_level.upper()}\n\n"
+            f"{approval.reason}\n\n"
+            f"Reply: `@agent approve {approval.approval_id}` or "
+            f"`@agent reject {approval.approval_id}`"
+        )
+        await self.post_to("approvals", text)
+
+    # -- event routing ------------------------------------------------------
+    async def route_event(self, event: Event) -> None:
+        channel = EVENT_CHANNEL.get(event.type)
+        if channel is None:
+            return
+        text = self._event_text(event)
+        if text:
+            await self.post_to(channel, text)
+
+    def _event_text(self, event: Event) -> str:
+        payload = event.payload or {}
+        if event.type == "approval.requested":
+            return f"🟠 Approval requested: {payload.get('stage', '?')} (run {payload.get('run', '?')})"
+        if event.type == "approval.granted":
+            return f"✅ Approval granted: {payload.get('stage', '?')}"
+        if event.type == "approval.rejected":
+            return f"❌ Approval rejected: {payload.get('stage', '?')}"
+        if event.type == "workflow.failed":
+            return f"🔴 Workflow failed at {payload.get('stage', '?')}: {payload.get('error', '')[:200]}"
+        if event.type == "workflow.completed":
+            return f"🎉 Workflow completed: {payload.get('workflow', '?')} (run {payload.get('run', '?')})"
+        if event.type == "project.created":
+            return f"🚀 Project created: {payload.get('name', '?')}"
+        if event.type == "model.failover":
+            return f"⚠️ Model failover: {payload.get('from')} → {payload.get('to')} ({payload.get('reason', '')[:120]})"
+        if event.type == "budget.warning":
+            return (f"💰 Budget warning [{payload.get('scope')}:{payload.get('scope_id')}]: "
+                    f"${payload.get('spent', 0):.2f} of ${payload.get('limit', 0):.2f} used")
+        if event.type == "deployment.started":
+            return "🚢 Deployment started"
+        if event.type == "deployment.completed":
+            return "✅ Deployment completed"
+        if event.type == "deployment.failed":
+            return "🔴 Deployment failed"
+        return ""
+
+    # -- human control ------------------------------------------------------
+    def pause_agent(self, agent_id: str) -> None:
+        self._paused_agents.add(agent_id)
+
+    def resume_agent(self, agent_id: str) -> None:
+        self._paused_agents.discard(agent_id)
+
+    def is_paused(self, agent_id: str) -> bool:
+        return agent_id in self._paused_agents
+
+    async def handle_message(self, message: dict, engine: Any, svc: Any) -> None:
+        """Process a human message: @agent commands, approvals, or a new goal."""
+        text = (message.get("message") or "").strip()
+        if not text or message.get("user_id") == self.bot_user_id:
+            return
+        if text.startswith("@agent"):
+            await self._handle_command(text, message, engine, svc)
+            return
+        if text.startswith(("@approve", "@reject", "@changes")):
+            await self._handle_approval(text, message, svc)
+            return
+        # otherwise: treat a message in the general channel as a goal
+        if self.on_command:
+            await self.on_command({
+                "type": "goal", "text": text, "user_id": message.get("user_id", "human"),
+                "channel": message.get("channel_id", ""),
+            })
+
+    async def _handle_command(self, text: str, message: dict, engine: Any, svc: Any) -> None:
+        parts = text.split()
+        command = parts[1] if len(parts) > 1 else "status"
+        arg = parts[2] if len(parts) > 2 else ""
+        channel = message.get("channel_id", "")
+        if command in ("stop", "pause"):
+            if arg:
+                svc.mattermost.pause_agent(arg)
+                await self.post_to("executive", f"⏸️ Agent `{arg}` paused by human.")
+            else:
+                await self.post_to("executive", "Specify an agent: `@agent stop <agent-id>`")
+        elif command == "resume":
+            if arg:
+                svc.mattermost.resume_agent(arg)
+                await self.post_to("executive", f"▶️ Agent `{arg}` resumed.")
+            else:
+                await self.post_to("executive", "Specify an agent: `@agent resume <agent-id>`")
+        elif command == "status":
+            agents = await svc.agent_registry.list(enabled_only=True)
+            instances = await svc.agent_registry.list_instances()
+            await self.post_status(agents, instances)
+        elif command == "approve":
+            approval = await svc.approvals.get(arg)
+            if approval:
+                await svc.approvals.decide(arg, "approved", "human")
+                await self.post_to("approvals", f"✅ Approved `{arg}`.")
+                await engine.approve(arg, "approved", decided_by="human")
+        elif command == "reject":
+            approval = await svc.approvals.get(arg)
+            if approval:
+                await svc.approvals.decide(arg, "rejected", "human")
+                await self.post_to("approvals", f"❌ Rejected `{arg}`.")
+                await engine.approve(arg, "rejected", decided_by="human")
+        elif command == "retry":
+            await self.post_to("executive", f"Retry requested for `{arg}` — re-queued.")
+            if arg and self.on_command:
+                await self.on_command({"type": "retry", "task_id": arg, "user_id": "human"})
+        elif command == "explain":
+            await self.post_to("executive",
+                               "I can explain: `@agent status`, `@agent stop <agent>`, "
+                               "`@agent resume <agent>`, `@agent approve <id>`, "
+                               "`@agent reject <id>`, `@agent retry <task>`. "
+                               "Or just tell me a goal in general.")
+        else:
+            await self.post_to("executive", f"Unknown command `{command}`. Try `@agent explain`.")
+
+    async def _handle_approval(self, text: str, message: dict, svc: Any) -> None:
+        parts = text.split()
+        decision = {"@approve": "approved", "@reject": "rejected",
+                    "@changes": "changes_requested"}.get(parts[0], "approved")
+        approval_id = parts[1] if len(parts) > 1 else ""
+        if not approval_id:
+            return
+        approval = await svc.approvals.get(approval_id)
+        if not approval or approval.status.value != "pending":
+            await self.post_to("approvals", f"`{approval_id}` is not pending.")
+            return
+        await svc.approvals.decide(approval_id, decision, "human")
+        await self.post_to("approvals",
+                           f"{'✅' if decision == 'approved' else '❌'} `{approval_id}` → {decision}")
+        if self.on_command:
+            await self.on_command({"type": "approval", "approval_id": approval_id,
+                                   "decision": decision, "user_id": message.get("user_id", "human")})

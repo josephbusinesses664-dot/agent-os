@@ -1,0 +1,174 @@
+"""Services bundle.
+
+One composition root: every subsystem is constructed here from settings and
+storage, and passed around as `svc`. Subsystems only depend on interfaces
+(registries, stores), never on each other's internals.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any, Optional
+
+from agentos.agents.runtime import AgentRuntime, RuntimeContext
+from agentos.budgets.manager import BudgetManager
+from agentos.config import Settings
+from agentos.db.memory import MemoryKV, MemoryQueue, MemoryRepository
+from agentos.db.postgres import PostgresRepository, RedisKV, RedisQueue
+from agentos.db.store import EntityStore
+from agentos.memory.store import MemoryStore
+from agentos.messaging.inbox import MessageBus
+from agentos.models.provider import build_providers
+from agentos.models.router import ModelRouter
+from agentos.observability.events import EventBus
+from agentos.projects.service import ProjectService
+from agentos.prompts.library import PromptLibrary
+from agentos.registries.agent_registry import AgentRegistry
+from agentos.registries.api_registry import ApiRegistry
+from agentos.registries.mcp_registry import McpRegistry
+from agentos.registries.model_registry import ModelRegistry
+from agentos.registries.skill_registry import SkillRegistry
+from agentos.registries.tool_registry import ToolRegistry
+from agentos.security.approvals import ApprovalService
+from agentos.security.audit import AuditLog
+from agentos.tasks.service import TaskService
+from agentos.tools.executor import ToolExecutor
+from agentos.workflows.loader import WorkflowRegistry
+
+
+@dataclass
+class Services:
+    settings: Settings
+    store: Any = None
+    entity_store: EntityStore = None  # type: ignore[assignment]
+    kv: Any = None
+    queue: Any = None
+
+    agent_registry: AgentRegistry = None  # type: ignore[assignment]
+    skill_registry: SkillRegistry = None  # type: ignore[assignment]
+    tool_registry: ToolRegistry = None  # type: ignore[assignment]
+    mcp_registry: McpRegistry = None  # type: ignore[assignment]
+    api_registry: ApiRegistry = None  # type: ignore[assignment]
+    model_registry: ModelRegistry = None  # type: ignore[assignment]
+    workflow_registry: WorkflowRegistry = None  # type: ignore[assignment]
+
+    providers: dict = field(default_factory=dict)
+    router: ModelRouter = None  # type: ignore[assignment]
+    budgets: BudgetManager = None  # type: ignore[assignment]
+
+    events: EventBus = None  # type: ignore[assignment]
+    audit: AuditLog = None  # type: ignore[assignment]
+    approvals: ApprovalService = None  # type: ignore[assignment]
+    memory: MemoryStore = None  # type: ignore[assignment]
+    messages: MessageBus = None  # type: ignore[assignment]
+    projects: ProjectService = None  # type: ignore[assignment]
+    tasks: TaskService = None  # type: ignore[assignment]
+    prompts: PromptLibrary = None  # type: ignore[assignment]
+    executor: ToolExecutor = None  # type: ignore[assignment]
+
+    mattermost: Any = None
+    web_search: Any = None
+
+    workspace: Path = None  # type: ignore[assignment]
+    graph: Any = None
+    engine: Any = None
+
+    def __post_init__(self) -> None:
+        if self.settings.database_url:
+            self.store = PostgresRepository(self.settings.database_url)
+        else:
+            self.store = MemoryRepository()
+        self.entity_store = EntityStore(self.store)
+        if self.settings.redis_url:
+            self.kv = RedisKV(self.settings.redis_url)
+            self.queue = RedisQueue(self.settings.redis_url)
+        else:
+            self.kv = MemoryKV()
+            self.queue = MemoryQueue()
+        self.workspace = Path(self.settings.workspace_dir).resolve()
+        self.workspace.mkdir(parents=True, exist_ok=True)
+
+        self.agent_registry = AgentRegistry(self.entity_store)
+        repo_root = Path(__file__).resolve().parents[1]
+        self.skill_registry = SkillRegistry(self.entity_store, repo_root / "skills")
+        self.tool_registry = ToolRegistry(self.entity_store)
+        self.mcp_registry = McpRegistry(self.entity_store)
+        self.api_registry = ApiRegistry(self.entity_store)
+        self.model_registry = ModelRegistry(self.entity_store)
+        self.workflow_registry = WorkflowRegistry(self.entity_store, repo_root / "workflows")
+
+        self.events = EventBus(self.entity_store)
+        self.audit = AuditLog(self.entity_store)
+        self.approvals = ApprovalService(self.entity_store)
+        self.memory = MemoryStore(self.entity_store)
+        self.messages = MessageBus(self.entity_store)
+        self.projects = ProjectService(self.entity_store)
+        self.tasks = TaskService(self.entity_store)
+        self.prompts = PromptLibrary(self.settings)
+
+        self.providers = build_providers(self.settings, {})
+
+        async def _pick_downgrade(tier: str) -> Optional[str]:
+            models = await self.model_registry.by_tier(tier)
+            models.sort(key=lambda m: m.price_in_per_million + m.price_out_per_million)
+            return models[0].id if models else None
+
+        self.budgets = BudgetManager(self.settings, self.entity_store,
+                                     emit=self.events.publish,
+                                     downgrade_picker=_pick_downgrade)
+        self.router = ModelRouter(self.settings, self.model_registry, self.budgets,
+                                  self.providers)
+        self.executor = ToolExecutor(self.tool_registry, self.approvals, self.audit,
+                                     require_approval_risk=self.settings.require_approval_risk)
+
+    async def seed(self) -> dict[str, int]:
+        """Populate default registries (idempotent)."""
+        counts = {
+            "agents": await self.agent_registry.seed_defaults(),
+            "skills": await self.skill_registry.load_from_disk(),
+            "tools": await self.tool_registry.seed_defaults(),
+            "apis": await self.api_registry.seed_defaults(),
+            "models": await self.model_registry.seed_defaults(),
+            "workflows": await self.workflow_registry.load_from_disk(),
+        }
+        # refresh providers with the (seeded) model definitions
+        model_defs = {m.id: m for m in await self.model_registry.list()}
+        self.providers = build_providers(self.settings, model_defs)
+        self.router.providers = self.providers
+        return counts
+
+    async def init_db(self) -> None:
+        if isinstance(self.store, PostgresRepository):
+            await self.store.init()
+
+    async def close(self) -> None:
+        if isinstance(self.store, PostgresRepository):
+            await self.store.close()
+
+    # -- runtime context for one agent run ---------------------------------
+    @property
+    def api_catalog(self) -> Any:
+        return self.api_registry
+
+    @property
+    def mcp(self) -> Any:
+        return self.mcp_registry
+
+    @property
+    def tools(self) -> Any:
+        return self.tool_registry
+
+    def runtime(self, agent: Any, task: Any, project: Any,
+                approved_tools: Optional[set[str]] = None) -> AgentRuntime:
+        ctx = RuntimeContext(
+            agent=agent, task=task, project=project,
+            workspace=self.workspace / (project.project_id if project else "default"),
+            services=self, executor=self.executor, router=self.router,
+            prompts=self.prompts, skill_registry=self.skill_registry,
+            agent_registry=self.agent_registry, event_bus=self.events,
+            budget_manager=self.budgets, approved_tools=approved_tools or set(),
+        )
+        ctx.services = self  # expose the full bundle to handlers
+        ctx.approved_tools = approved_tools or set()
+        return AgentRuntime(ctx)

@@ -1,0 +1,182 @@
+workflow_id: zero_to_hundred
+name: 0 → 100 Full Project
+description: >
+  The reusable end-to-end project workflow: idea → discovery → intelligence →
+  strategy → product → design → architecture → implementation → testing →
+  security → performance → review → deployment → monitoring. Modular: the
+  executive/PM skips stages a project does not need by starting at a later
+  entry stage.
+version: "1.0.0"
+entry_stage: understanding
+stages:
+  - stage_id: understanding
+    name: Executive Understanding
+    agent_role: executive
+    description: >
+      Understand the user's goal. Restate the objective, identify the 
+      decisions to be made, the stage(s) this project actually needs, and
+      the success criteria. Record the understanding in the project.
+      Write it to artifacts/understanding.md.
+      PLANNED_TOOL_CALLS: [{"tool":"filesystem.write","args":{"path":"artifacts/understanding.md","content":"AUTO"}}]
+    artifact_prefix: understanding
+
+  - stage_id: discovery
+    name: Discovery
+    agent_role: product-researcher
+    description: >
+      Conduct opportunity discovery for the project objective: market signals,
+      demand evidence, trends, customer language and product gaps. Produce an
+      evidence-oriented discovery brief.
+      Write it to artifacts/discovery.md.
+      PLANNED_TOOL_CALLS: [{"tool":"filesystem.write","args":{"path":"artifacts/discovery.md","content":"AUTO"}}]
+    depends_on: [understanding]
+
+  - stage_id: community_intelligence
+    name: Community & Market Intelligence
+    agent_role: community-researcher
+    description: >
+      Gather community/market intelligence: pain points, recurring complaints,
+      feature requests, buying-intent signals and unmet demand, from multiple
+      sources. Quotes verbatim with links.
+      Write the intelligence brief to artifacts/community-intelligence.md.
+      PLANNED_TOOL_CALLS: [{"tool":"filesystem.write","args":{"path":"artifacts/community-intelligence.md","content":"AUTO"}}]
+    depends_on: [discovery]
+
+  - stage_id: opportunity
+    name: Opportunity Analysis
+    agent_role: market-researcher
+    description: >
+      Analyze and score the opportunity: market sizing (TAM/SAM/SOM with
+      assumptions), demand strength, competition, and an opportunity score
+      per theme. Recommend pursue / iterate / kill with evidence.
+      Write the analysis to artifacts/opportunity.md.
+      PLANNED_TOOL_CALLS: [{"tool":"filesystem.write","args":{"path":"artifacts/opportunity.md","content":"AUTO"}}]
+    depends_on: [community_intelligence]
+
+  - stage_id: strategy
+    name: Strategy
+    agent_role: executive
+    description: >
+      Decide where to play and how to win: positioning, business model,
+      differentiation, pricing direction, and explicit non-goals. Record the
+      strategy decision in the decision log.
+      Write the strategy memo to artifacts/strategy.md.
+      PLANNED_TOOL_CALLS: [{"tool":"filesystem.write","args":{"path":"artifacts/strategy.md","content":"AUTO"}}]
+    depends_on: [opportunity]
+
+  - stage_id: product_definition
+    name: Product Definition
+    agent_role: product-manager
+    description: >
+      Define the product from the strategy: target user, core job, scope,
+      success metrics and requirements outline. Record requirements in the
+      project.
+      Write the definition to artifacts/product-definition.md.
+      PLANNED_TOOL_CALLS: [{"tool":"filesystem.write","args":{"path":"artifacts/product-definition.md","content":"AUTO"}}]
+    depends_on: [strategy]
+
+  - stage_id: prd
+    name: PRD
+    agent_role: product-manager
+    description: >
+      Write the PRD: problem, users, goals/non-goals, success metrics,
+      numbered testable requirements (SHALL statements), edge cases and open
+      questions.
+      Write it to artifacts/PRD.md.
+      PLANNED_TOOL_CALLS: [{"tool":"filesystem.write","args":{"path":"artifacts/PRD.md","content":"AUTO"}}]
+    depends_on: [product_definition]
+
+  - stage_id: design
+    name: UX / Design
+    agent_role: design-director
+    description: >
+      Design direction: information architecture, UX flows, visual direction,
+      design quality bar and accessibility requirements. Advanced motion
+      (GSAP/3D) only where it genuinely improves the experience.
+      Write the design brief to artifacts/design.md.
+      PLANNED_TOOL_CALLS: [{"tool":"filesystem.write","args":{"path":"artifacts/design.md","content":"AUTO"}}]
+    depends_on: [prd]
+
+  - stage_id: architecture
+    name: Architecture
+    agent_role: software-architect
+    description: >
+      System architecture: boundaries, data model, API contracts, provider
+      choices and trade-offs recorded as decisions. Security considered from
+      the start.
+      Write the architecture doc to artifacts/architecture.md.
+      PLANNED_TOOL_CALLS: [{"tool":"filesystem.write","args":{"path":"artifacts/architecture.md","content":"AUTO"}}]
+    depends_on: [prd]
+
+  - stage_id: implementation
+    name: Implementation
+    agent_role: frontend-lead
+    description: >
+      Implement the product per the PRD and architecture. Production quality:
+      type safety, tests, error handling, accessibility. Only claim what was
+      actually built and verified.
+      Write a build report to artifacts/implementation.md.
+      PLANNED_TOOL_CALLS: [{"tool":"filesystem.write","args":{"path":"artifacts/implementation.md","content":"AUTO"}}]
+    depends_on: [design, architecture]
+
+  - stage_id: testing
+    name: Testing
+    agent_role: test-engineer
+    description: >
+      Write and RUN tests for the implementation (unit + integration + e2e as
+      appropriate). Report actual pass/fail output — evidence, not claims.
+      Write the test report to artifacts/testing.md.
+      PLANNED_TOOL_CALLS: [{"tool":"filesystem.write","args":{"path":"artifacts/testing.md","content":"AUTO"}}]
+    depends_on: [implementation]
+
+  - stage_id: security
+    name: Security Review
+    agent_role: security-reviewer
+    description: >
+      Security review of the implementation: secrets, injection, authz,
+      unsafe commands, dependency risk, excessive permissions. Findings with
+      severity; no critical/high may ship.
+      Write the security report to artifacts/security.md.
+      PLANNED_TOOL_CALLS: [{"tool":"filesystem.write","args":{"path":"artifacts/security.md","content":"AUTO"}}]
+    depends_on: [implementation]
+
+  - stage_id: performance
+    name: Performance Review
+    agent_role: performance-reviewer
+    description: >
+      Performance review: frontend budgets, query patterns, hot paths.
+      Findings with evidence.
+      Write the performance report to artifacts/performance.md.
+      PLANNED_TOOL_CALLS: [{"tool":"filesystem.write","args":{"path":"artifacts/performance.md","content":"AUTO"}}]
+    depends_on: [implementation]
+
+  - stage_id: final_review
+    name: Final Review
+    agent_role: code-reviewer
+    description: >
+      Final review against the PRD: requirements met, quality gates passed,
+      review score. Pass or list the changes required.
+      Write the review to artifacts/final-review.md.
+      PLANNED_TOOL_CALLS: [{"tool":"filesystem.write","args":{"path":"artifacts/final-review.md","content":"AUTO"}}]
+    depends_on: [testing, security, performance]
+
+  - stage_id: deployment
+    name: Deployment
+    agent_role: deployment-agent
+    description: >
+      Deploy the project (staging by default). Production deployments require
+      human approval — this stage pauses for approval automatically.
+      Write the deployment report to artifacts/deployment.md.
+      PLANNED_TOOL_CALLS: [{"tool":"filesystem.write","args":{"path":"artifacts/deployment.md","content":"AUTO"}}]
+    requires_approval: true
+    depends_on: [final_review]
+
+  - stage_id: monitoring
+    name: Monitoring & Handoff
+    agent_role: monitoring-agent
+    description: >
+      Set up health checks and monitoring for the deployment, document the
+      runbooks, and produce the final project handoff summary.
+      Write it to artifacts/handoff.md.
+      PLANNED_TOOL_CALLS: [{"tool":"filesystem.write","args":{"path":"artifacts/handoff.md","content":"AUTO"}}]
+    depends_on: [deployment]

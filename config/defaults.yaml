@@ -1,0 +1,40 @@
+# Agent OS default configuration.
+# Environment variables (see .env.example) take precedence over these values.
+# This file documents the defaults; the running config is read from env only.
+
+identity:
+  name: Agent OS
+  org: prem-ium.inc
+  environment: development
+
+orchestration:
+  max_agent_depth: 4
+  max_parallel_agents: 8
+  max_task_retries: 3
+  max_task_seconds: 1800
+  recursion_limit: 200
+
+budgets:
+  global_monthly_usd: 100.0
+  global_daily_usd: 20.0
+  default_project_budget_usd: 25.0
+  auto_downgrade_on_budget: true
+
+model_tiers:
+  t0: "deterministic — no LLM (code/tools only)"
+  t1: "cheap workers — classification, extraction, summarization"
+  t2: "senior workers — coding, research, analysis, debugging"
+  t3: "executive reasoning — strategy, architecture, high-risk judgment"
+
+security:
+  require_approval_risk: high
+  sandboxed_workspace: true
+  audit_every_tool_call: true
+
+observability:
+  events_persisted: true
+  budget_warning_threshold: 0.9
+
+workers:
+  poll_interval_seconds: 2
+  max_concurrency: 1  # scale by running more worker containers

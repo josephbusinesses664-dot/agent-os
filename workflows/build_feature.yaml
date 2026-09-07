@@ -1,0 +1,60 @@
+workflow_id: build_feature
+name: Build a Feature
+description: Product → engineering → QA pipeline for a defined feature.
+version: "1.0.0"
+entry_stage: requirements
+stages:
+  - stage_id: requirements
+    name: Requirements
+    agent_role: requirements-analyst
+    description: >
+      Extract precise, testable requirements and acceptance criteria for the
+      feature request. Write to artifacts/requirements.md.
+      PLANNED_TOOL_CALLS: [{"tool":"filesystem.write","args":{"path":"artifacts/requirements.md","content":"AUTO"}}]
+
+  - stage_id: design
+    name: Design
+    agent_role: design-director
+    description: >
+      Design direction for the feature consistent with the product: flows,
+      states, accessibility, design quality. Write to artifacts/feature-design.md.
+      PLANNED_TOOL_CALLS: [{"tool":"filesystem.write","args":{"path":"artifacts/feature-design.md","content":"AUTO"}}]
+    depends_on: [requirements]
+
+  - stage_id: implementation
+    name: Implementation
+    agent_role: frontend-lead
+    description: >
+      Implement the feature per requirements and design. Type safety, error
+      handling, accessibility, tests. Write a build report to
+      artifacts/feature-implementation.md.
+      PLANNED_TOOL_CALLS: [{"tool":"filesystem.write","args":{"path":"artifacts/feature-implementation.md","content":"AUTO"}}]
+    depends_on: [requirements, design]
+
+  - stage_id: testing
+    name: Testing
+    agent_role: test-engineer
+    description: >
+      Run tests against the implementation and report actual results. Write
+      to artifacts/feature-tests.md.
+      PLANNED_TOOL_CALLS: [{"tool":"filesystem.write","args":{"path":"artifacts/feature-tests.md","content":"AUTO"}}]
+    depends_on: [implementation]
+
+  - stage_id: review
+    name: Review
+    agent_role: code-reviewer
+    description: >
+      Review the implementation against requirements and quality bar. Write
+      findings to artifacts/feature-review.md.
+      PLANNED_TOOL_CALLS: [{"tool":"filesystem.write","args":{"path":"artifacts/feature-review.md","content":"AUTO"}}]
+    depends_on: [testing]
+
+  - stage_id: deploy
+    name: Deployment
+    agent_role: deployment-agent
+    description: >
+      Deploy the feature (staging). Production requires approval. Write the
+      deployment report to artifacts/feature-deploy.md.
+      PLANNED_TOOL_CALLS: [{"tool":"filesystem.write","args":{"path":"artifacts/feature-deploy.md","content":"AUTO"}}]
+    requires_approval: true
+    depends_on: [review]

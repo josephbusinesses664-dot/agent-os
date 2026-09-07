@@ -1,0 +1,1 @@
+"""Budget subsystem: limits, tracking, auto-downgrade decisions."""

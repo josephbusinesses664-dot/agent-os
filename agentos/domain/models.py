@@ -1,0 +1,523 @@
+"""Core domain models.
+
+These are the canonical types for every subsystem: agents, tasks, projects,
+skills, tools, MCP servers, models, budgets, events, memory, approvals, audit
+and agent-to-agent messages. They are plain pydantic objects so they can be
+stored, serialized, validated and exchanged freely.
+"""
+
+from __future__ import annotations
+
+import uuid
+from datetime import datetime, timezone
+from enum import Enum
+from typing import Any, Optional
+
+from pydantic import BaseModel, Field
+
+
+def utcnow() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def new_id(prefix: str) -> str:
+    return f"{prefix}_{uuid.uuid4().hex[:12]}"
+
+
+# ---------------------------------------------------------------------------
+# Agents
+# ---------------------------------------------------------------------------
+
+class AgentStatus(str, Enum):
+    IDLE = "idle"
+    WORKING = "working"
+    AWAITING_REVIEW = "awaiting_review"
+    AWAITING_APPROVAL = "awaiting_approval"
+    BLOCKED = "blocked"
+    FAILED = "failed"
+    PAUSED = "paused"
+    OFFLINE = "offline"
+
+
+class AgentDef(BaseModel):
+    """Static definition of an agent (lives in the Agent Registry)."""
+
+    id: str
+    name: str
+    role: str
+    description: str = ""
+    parent_agent: Optional[str] = None
+    allowed_children: list[str] = Field(default_factory=list)
+    skills: list[str] = Field(default_factory=list)
+    tools: list[str] = Field(default_factory=list)
+    mcp_servers: list[str] = Field(default_factory=list)
+    model_policy: dict[str, Any] = Field(
+        default_factory=lambda: {"tier": "t2", "preferred_models": [], "max_tier": "t3"}
+    )
+    budget_policy: dict[str, Any] = Field(
+        default_factory=lambda: {"max_per_task": 0.5, "max_per_day": 5.0}
+    )
+    permissions: dict[str, str] = Field(default_factory=dict)  # tool -> allow|deny
+    memory_scope: str = "agent"  # agent | project | org
+    risk_level: str = "low"  # low | medium | high
+    version: int = 1
+    enabled: bool = True
+    created_at: datetime = Field(default_factory=utcnow)
+
+    def allows(self, tool: str) -> bool:
+        return self.permissions.get(tool, "allow") == "allow"
+
+
+class AgentInstance(BaseModel):
+    """Runtime state of an agent."""
+
+    agent_id: str
+    status: AgentStatus = AgentStatus.IDLE
+    current_task_id: Optional[str] = None
+    current_project_id: Optional[str] = None
+    model: Optional[str] = None
+    started_at: Optional[datetime] = None
+    latest_action: str = ""
+    error: Optional[str] = None
+    spawn_depth: int = 0
+
+
+# ---------------------------------------------------------------------------
+# Tasks
+# ---------------------------------------------------------------------------
+
+class TaskStatus(str, Enum):
+    PENDING = "pending"
+    QUEUED = "queued"
+    RUNNING = "running"
+    BLOCKED = "blocked"
+    AWAITING_REVIEW = "awaiting_review"
+    AWAITING_APPROVAL = "awaiting_approval"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+
+
+class Task(BaseModel):
+    task_id: str
+    project_id: str
+    title: str
+    description: str = ""
+    parent_task: Optional[str] = None
+    assigned_agent: Optional[str] = None
+    status: TaskStatus = TaskStatus.PENDING
+    priority: str = "normal"  # low | normal | high | critical
+    dependencies: list[str] = Field(default_factory=list)
+    budget: Optional[float] = None
+    deadline: Optional[datetime] = None
+    artifacts: list[str] = Field(default_factory=list)
+    result: Optional[str] = None
+    review_status: Optional[str] = None  # pending | passed | failed
+    created_by: str = "executive"
+    agent_chain: list[str] = Field(default_factory=list)
+    model_used: Optional[str] = None
+    cost: float = 0.0
+    error: Optional[str] = None
+    retry_count: int = 0
+    created_at: datetime = Field(default_factory=utcnow)
+    updated_at: datetime = Field(default_factory=utcnow)
+
+    def touch(self) -> None:
+        self.updated_at = utcnow()
+
+
+class TaskDependency(BaseModel):
+    """Declares that `task_id` depends on `depends_on`."""
+
+    task_id: str
+    depends_on: str
+    project_id: str
+
+
+# ---------------------------------------------------------------------------
+# Projects
+# ---------------------------------------------------------------------------
+
+class ProjectStatus(str, Enum):
+    IDEA = "idea"
+    DISCOVERY = "discovery"
+    ACTIVE = "active"
+    IN_REVIEW = "in_review"
+    COMPLETED = "completed"
+    PAUSED = "paused"
+    CANCELLED = "cancelled"
+
+
+class Project(BaseModel):
+    project_id: str
+    name: str
+    objective: str = ""
+    status: ProjectStatus = ProjectStatus.IDEA
+    stage: str = ""  # current workflow stage id
+    workflow_id: Optional[str] = None
+    requirements: list[str] = Field(default_factory=list)
+    decisions: list[str] = Field(default_factory=list)
+    artifacts: list[str] = Field(default_factory=list)
+    budget: float = 0.0
+    cost: float = 0.0
+    created_by: str = "executive"
+    created_at: datetime = Field(default_factory=utcnow)
+    updated_at: datetime = Field(default_factory=utcnow)
+
+    def touch(self) -> None:
+        self.updated_at = utcnow()
+
+
+# ---------------------------------------------------------------------------
+# Skills
+# ---------------------------------------------------------------------------
+
+class SkillDef(BaseModel):
+    id: str
+    name: str
+    description: str
+    category: str
+    version: str = "1.0.0"
+    source: str = ""  # provenance: repo / author / license
+    license: str = ""
+    capability_type: str = "skill"  # skill | agent | workflow | tool | prompt | hook
+    required_tools: list[str] = Field(default_factory=list)
+    required_models: list[str] = Field(default_factory=list)
+    risk_level: str = "low"
+    cost_level: str = "low"
+    dependencies: list[str] = Field(default_factory=list)
+    compatible_agents: list[str] = Field(default_factory=list)
+    tags: list[str] = Field(default_factory=list)
+    enabled: bool = True
+    body: str = ""  # full markdown body (loaded lazily where practical)
+    source_path: str = ""
+
+
+# ---------------------------------------------------------------------------
+# Tools / MCP
+# ---------------------------------------------------------------------------
+
+class ToolDef(BaseModel):
+    name: str
+    description: str
+    permission_key: str = ""
+    risk_level: str = "low"
+    enabled: bool = True
+    category: str = "builtin"
+    config: dict[str, Any] = Field(default_factory=dict)
+
+
+class McpServer(BaseModel):
+    name: str
+    description: str = ""
+    transport: str = "streamable-http"  # streamable-http | stdio | builtin
+    endpoint: Optional[str] = None
+    command: Optional[str] = None  # for stdio
+    args: list[str] = Field(default_factory=list)
+    tools: list[str] = Field(default_factory=list)
+    permissions: dict[str, str] = Field(default_factory=dict)
+    risk_level: str = "medium"
+    required_credentials: list[str] = Field(default_factory=list)
+    enabled: bool = True
+
+
+# ---------------------------------------------------------------------------
+# Models
+# ---------------------------------------------------------------------------
+
+class ModelDef(BaseModel):
+    id: str
+    provider: str  # deepseek | anthropic | glm | openai_compat | echo
+    name: str  # provider-side model name
+    tier: str = "t2"  # t0 deterministic | t1 cheap | t2 senior | t3 executive
+    context_window: int = 128000
+    price_in_per_million: float = 0.0  # USD
+    price_out_per_million: float = 0.0
+    enabled: bool = True
+    capabilities: list[str] = Field(default_factory=list)
+    fallbacks: list[str] = Field(default_factory=list)
+
+
+class ModelRequest(BaseModel):
+    model_id: str
+    messages: list[dict[str, str]] = Field(default_factory=list)  # [{role, content}]
+    system: str = ""
+    temperature: float = 0.3
+    max_tokens: int = 4096
+    request_id: str = Field(default_factory=lambda: new_id("req"))
+    project_id: Optional[str] = None
+    agent_id: Optional[str] = None
+    task_id: Optional[str] = None
+
+
+class ModelResponse(BaseModel):
+    request_id: str
+    model_id: str
+    content: str = ""
+    tool_calls: list[dict[str, Any]] = Field(default_factory=list)
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    total_tokens: int = 0
+    estimated_cost: float = 0.0
+    finish_reason: str = "stop"
+    error: Optional[str] = None
+
+
+class UsageRecord(BaseModel):
+    usage_id: str = Field(default_factory=lambda: new_id("use"))
+    ts: datetime = Field(default_factory=utcnow)
+    provider: str
+    model: str
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    estimated_cost: float = 0.0
+    project_id: Optional[str] = None
+    agent_id: Optional[str] = None
+    task_id: Optional[str] = None
+    request_id: Optional[str] = None
+
+
+# ---------------------------------------------------------------------------
+# Budgets
+# ---------------------------------------------------------------------------
+
+class BudgetScope(str, Enum):
+    GLOBAL = "global"
+    PROJECT = "project"
+    AGENT = "agent"
+    TASK = "task"
+
+
+class Budget(BaseModel):
+    scope: BudgetScope
+    scope_id: str = "global"
+    monthly_limit: Optional[float] = None
+    daily_limit: Optional[float] = None
+    spent_month: float = 0.0
+    spent_day: float = 0.0
+    day_bucket: str = ""  # YYYY-MM-DD for the spent_day bucket
+    updated_at: datetime = Field(default_factory=utcnow)
+
+
+class BudgetDecision(BaseModel):
+    allowed: bool
+    action: str  # approve | downgrade | reject
+    reason: str
+    suggested_model: Optional[str] = None
+
+
+# ---------------------------------------------------------------------------
+# Events / Observability
+# ---------------------------------------------------------------------------
+
+class Event(BaseModel):
+    event_id: str = Field(default_factory=lambda: new_id("evt"))
+    ts: datetime = Field(default_factory=utcnow)
+    type: str
+    source: str = "system"
+    project_id: Optional[str] = None
+    task_id: Optional[str] = None
+    agent_id: Optional[str] = None
+    severity: str = "info"  # info | warning | error | critical
+    payload: dict[str, Any] = Field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, Any]:
+        d = self.model_dump()
+        d["ts"] = self.ts.isoformat()
+        return d
+
+
+class AuditEntry(BaseModel):
+    audit_id: str = Field(default_factory=lambda: new_id("aud"))
+    ts: datetime = Field(default_factory=utcnow)
+    actor: str = "system"
+    action: str
+    target: str = ""
+    project_id: Optional[str] = None
+    task_id: Optional[str] = None
+    tool: Optional[str] = None
+    model: Optional[str] = None
+    result: str = "ok"
+    details: dict[str, Any] = Field(default_factory=dict)
+
+
+class HealthReport(BaseModel):
+    service: str
+    status: str  # ok | degraded | down
+    latency_ms: int = 0
+    detail: str = ""
+
+
+class ApiDef(BaseModel):
+    """An API in the API catalog."""
+
+    api: str
+    category: str
+    description: str = ""
+    authentication: str = "none"  # none | api_key | oauth
+    pricing: str = "free"  # free | freemium | paid
+    rate_limit: str = "unknown"
+    commercial_use: bool = True
+    documentation: str = ""
+    reliability: str = "good"
+    agent_compatibility: int = 3  # 1..5
+    base_url: str = ""
+    enabled: bool = True
+
+
+# ---------------------------------------------------------------------------
+# Memory
+# ---------------------------------------------------------------------------
+
+class MemoryScope(str, Enum):
+    AGENT = "agent"
+    PROJECT = "project"
+    ORG = "org"
+    USER = "user"
+    TASK = "task"
+
+
+class MemoryEntry(BaseModel):
+    memory_id: str = Field(default_factory=lambda: new_id("mem"))
+    scope: MemoryScope
+    owner_id: str  # agent id / project id / "org" / user id / task id
+    kind: str = "fact"  # decision | preference | lesson | fact | instruction
+    content: str
+    importance: int = 3  # 1..5
+    tags: list[str] = Field(default_factory=list)
+    created_at: datetime = Field(default_factory=utcnow)
+    updated_at: datetime = Field(default_factory=utcnow)
+
+
+# ---------------------------------------------------------------------------
+# Approvals
+# ---------------------------------------------------------------------------
+
+class ApprovalStatus(str, Enum):
+    PENDING = "pending"
+    APPROVED = "approved"
+    REJECTED = "rejected"
+    CHANGES_REQUESTED = "changes_requested"
+
+
+class ApprovalRequest(BaseModel):
+    approval_id: str = Field(default_factory=lambda: new_id("apr"))
+    agent_id: str
+    agent_name: str = ""
+    task_id: Optional[str] = None
+    project_id: Optional[str] = None
+    action: str
+    risk_level: str = "high"
+    reason: str = ""
+    status: ApprovalStatus = ApprovalStatus.PENDING
+    decided_by: Optional[str] = None
+    decided_at: Optional[datetime] = None
+    decision_note: str = ""
+    created_at: datetime = Field(default_factory=utcnow)
+
+
+# ---------------------------------------------------------------------------
+# Agent-to-agent messaging
+# ---------------------------------------------------------------------------
+
+class MessageType(str, Enum):
+    TASK_REQUEST = "task_request"
+    TASK_RESULT = "task_result"
+    QUESTION = "question"
+    APPROVAL = "approval"
+    ESCALATION = "escalation"
+    WARNING = "warning"
+    FAILURE = "failure"
+    STATUS_UPDATE = "status_update"
+    REVIEW = "review"
+    DISCOVERY = "discovery"
+    DECISION = "decision"
+
+
+class AgentMessage(BaseModel):
+    message_id: str = Field(default_factory=lambda: new_id("msg"))
+    message_type: MessageType
+    sender: str
+    recipient: str = "executive"
+    project_id: Optional[str] = None
+    task_id: Optional[str] = None
+    priority: str = "normal"
+    payload: dict[str, Any] = Field(default_factory=dict)
+    requires_response: bool = False
+    response_to: Optional[str] = None
+    status: str = "sent"  # sent | delivered | answered
+    created_at: datetime = Field(default_factory=utcnow)
+
+
+# ---------------------------------------------------------------------------
+# Decisions
+# ---------------------------------------------------------------------------
+
+class DecisionRecord(BaseModel):
+    decision_id: str = Field(default_factory=lambda: new_id("dec"))
+    project: Optional[str] = None
+    decision: str
+    alternatives: list[str] = Field(default_factory=list)
+    reasoning_summary: str = ""
+    decided_by: str = "executive"
+    date: datetime = Field(default_factory=utcnow)
+    reversible: bool = True
+
+
+# ---------------------------------------------------------------------------
+# Workflows
+# ---------------------------------------------------------------------------
+
+class WorkflowStage(BaseModel):
+    stage_id: str
+    name: str
+    agent_role: str  # agent registry id used to run this stage
+    description: str = ""
+    requires_approval: bool = False
+    depends_on: list[str] = Field(default_factory=list)
+    next: Optional[str] = None
+    artifact_prefix: str = ""
+
+
+class WorkflowDef(BaseModel):
+    workflow_id: str
+    name: str
+    description: str = ""
+    entry_stage: str
+    stages: list[WorkflowStage]
+    version: str = "1.0.0"
+    source_path: str = ""
+
+    def stage_map(self) -> dict[str, WorkflowStage]:
+        return {s.stage_id: s for s in self.stages}
+
+
+# ---------------------------------------------------------------------------
+# Results / evaluation
+# ---------------------------------------------------------------------------
+
+class StageResult(BaseModel):
+    stage_id: str
+    agent_id: str
+    task_id: Optional[str] = None
+    status: str = "completed"  # completed | failed | skipped | awaiting_approval
+    output: str = ""
+    artifacts: list[str] = Field(default_factory=list)
+    model: Optional[str] = None
+    cost: float = 0.0
+    started_at: datetime = Field(default_factory=utcnow)
+    finished_at: Optional[datetime] = None
+    error: Optional[str] = None
+    reflection: dict[str, Any] = Field(default_factory=dict)
+
+
+class AgentEvaluation(BaseModel):
+    eval_id: str = Field(default_factory=lambda: new_id("ev"))
+    agent_id: str
+    ts: datetime = Field(default_factory=utcnow)
+    task_id: Optional[str] = None
+    outcome: str = "completed"
+    review_score: float = 0.0  # 0..5
+    cost: float = 0.0
+    tool_usage: list[str] = Field(default_factory=list)
+    notes: str = ""

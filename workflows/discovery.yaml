@@ -1,0 +1,50 @@
+workflow_id: discovery
+name: Discovery & Opportunity
+description: Research-only pipeline — validate an idea before building.
+version: "1.0.0"
+entry_stage: understanding
+stages:
+  - stage_id: understanding
+    name: Executive Understanding
+    agent_role: executive
+    description: >
+      Restate the idea, the decision it informs, and the success criteria for
+      the research. Record in the project.
+      PLANNED_TOOL_CALLS: [{"tool":"filesystem.write","args":{"path":"artifacts/understanding.md","content":"AUTO"}}]
+
+  - stage_id: discovery
+    name: Discovery
+    agent_role: product-researcher
+    description: >
+      Market signals, demand evidence, trends and customer language for the idea.
+      Write the discovery brief to artifacts/discovery.md.
+      PLANNED_TOOL_CALLS: [{"tool":"filesystem.write","args":{"path":"artifacts/discovery.md","content":"AUTO"}}]
+    depends_on: [understanding]
+
+  - stage_id: community_intelligence
+    name: Community Intelligence
+    agent_role: community-researcher
+    description: >
+      Pain points, feature requests, buying-intent signals and unmet demand
+      from communities. Write the brief to artifacts/community-intelligence.md.
+      PLANNED_TOOL_CALLS: [{"tool":"filesystem.write","args":{"path":"artifacts/community-intelligence.md","content":"AUTO"}}]
+    depends_on: [discovery]
+
+  - stage_id: opportunity
+    name: Opportunity Analysis
+    agent_role: market-researcher
+    description: >
+      Score the opportunity with evidence; recommend pursue / iterate / kill.
+      Write to artifacts/opportunity.md.
+      PLANNED_TOOL_CALLS: [{"tool":"filesystem.write","args":{"path":"artifacts/opportunity.md","content":"AUTO"}}]
+    depends_on: [community_intelligence]
+
+  - stage_id: decision
+    name: Decision
+    agent_role: executive
+    description: >
+      Synthesize into a go/no-go recommendation with the evidence and the
+      top open questions. Record the decision in the decision log.
+      Write to artifacts/decision.md.
+      PLANNED_TOOL_CALLS: [{"tool":"filesystem.write","args":{"path":"artifacts/decision.md","content":"AUTO"}}]
+    depends_on: [opportunity]

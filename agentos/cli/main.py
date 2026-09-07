@@ -1,0 +1,468 @@
+"""agent-os — the Agent OS administration CLI."""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import os
+import signal
+import sys
+from pathlib import Path
+from typing import Optional
+
+import typer
+
+from agentos.config import get_settings
+
+app = typer.Typer(help="Agent OS — the Unified AI Agency Operating System",
+                  no_args_is_help=True)
+
+PID_FILE = Path(".agent-os.pid")
+
+
+def _run(coro):
+    return asyncio.run(coro)
+
+
+async def _load_svc():
+    from agentos.bootstrap import build_app
+
+    return await build_app()
+
+
+# ---------------------------------------------------------------------------
+# System
+# ---------------------------------------------------------------------------
+
+@app.command()
+def start(daemon: bool = typer.Option(False, "--daemon", help="Run in background")):
+    """Start the control plane: API + worker + Mattermost listener."""
+    if daemon:
+        import subprocess
+
+        proc = subprocess.Popen(
+            [sys.executable, "-m", "agentos.cli.main", "start"],
+            stdout=open("agent-os.log", "a"), stderr=subprocess.STDOUT,
+            start_new_session=True,
+        )
+        PID_FILE.write_text(str(proc.pid))
+        typer.echo(f"agent-os started in background (pid {proc.pid}) — log: agent-os.log")
+        return
+    typer.echo("Starting Agent OS…")
+
+    async def _main():
+        svc = await _load_svc()
+        typer.echo(f"AI AGENCY ONLINE — {svc.settings.agent_os_name}")
+        from agentos.bootstrap import run_control_plane
+
+        await run_control_plane(svc)
+
+    try:
+        _run(_main())
+    except KeyboardInterrupt:
+        typer.echo("\nStopped.")
+
+
+@app.command()
+def stop():
+    """Stop a background agent-os instance."""
+    if PID_FILE.exists():
+        pid = int(PID_FILE.read_text().strip())
+        try:
+            os.kill(pid, signal.SIGTERM)
+            typer.echo(f"Sent stop signal to pid {pid}")
+        except ProcessLookupError:
+            typer.echo("Process not running.")
+        PID_FILE.unlink(missing_ok=True)
+    else:
+        typer.echo("No background instance (start with --daemon to run one).")
+
+
+@app.command()
+def status():
+    """Show the live system status board."""
+    async def _main():
+        svc = await _load_svc()
+        agents = await svc.agent_registry.list(enabled_only=True)
+        instances = {i.agent_id: i for i in await svc.agent_registry.list_instances()}
+        active = [a for a in agents if instances.get(a.id) and instances[a.id].status.value in
+                  ("working", "awaiting_approval", "awaiting_review", "blocked")]
+        running = [a for a in agents if instances.get(a.id) and instances[a.id].status.value == "working"]
+        skills = len(await svc.skill_registry.list())
+        tools = len(await svc.tool_registry.list())
+        models = len(await svc.model_registry.list())
+        mcp = len(await svc.mcp_registry.list())
+        projects = len(await svc.projects.list())
+        tasks = len(await svc.tasks.list())
+        budgets = await svc.budgets.summary()
+        total_spent = sum(b.get("spent_month", 0) for b in budgets)
+        mm = "ONLINE" if svc.mattermost and svc.mattermost.available else "OFFLINE"
+        typer.echo("=" * 52)
+        typer.echo(f"  {svc.settings.agent_os_name.upper()}")
+        typer.echo("=" * 52)
+        typer.echo(f"  Executive:      ONLINE")
+        typer.echo(f"  Orchestrator:   ONLINE")
+        typer.echo(f"  Mattermost:     {mm}")
+        typer.echo(f"  Database:       {'postgres' if svc.settings.database_url else 'in-memory'}")
+        typer.echo(f"  Redis:          {'on' if svc.settings.redis_url else 'off'}")
+        typer.echo("-" * 52)
+        typer.echo(f"  Agents: {len(agents)} available | {len(running)} active | {len(agents) - len(active)} idle")
+        typer.echo(f"  Skills: {skills} | Tools: {tools} | Models: {models} | MCP: {mcp}")
+        typer.echo(f"  Projects: {projects} | Tasks: {tasks}")
+        typer.echo(f"  Budget spent (month): ${total_spent:.3f}")
+        typer.echo("=" * 52)
+
+    _run(_main())
+
+
+@app.command()
+def health():
+    """Run the full health check."""
+    async def _main():
+        svc = await _load_svc()
+        from agentos.observability.health import HealthChecker
+
+        reports = await HealthChecker(svc).check_all()
+        for report in reports:
+            mark = {"ok": "✅", "down": "❌", "degraded": "⚠️"}.get(report.status, "⚠️")
+            typer.echo(f"  {mark} {report.service:<18} {report.status:<8} "
+                       f"{report.latency_ms}ms  {report.detail}")
+        overall = HealthChecker(svc).overall(reports)
+        typer.echo(f"\nSystem health: {overall}")
+
+    _run(_main())
+
+
+# ---------------------------------------------------------------------------
+# Agents
+# ---------------------------------------------------------------------------
+
+@app.command()
+def agents(
+    action: str = typer.Argument(..., help="list | create | disable | enable | show"),
+    agent_id: Optional[str] = typer.Argument(None),
+    name: Optional[str] = typer.Option(None, "--name"),
+    role: Optional[str] = typer.Option(None, "--role"),
+    parent: Optional[str] = typer.Option(None, "--parent"),
+    json_output: bool = typer.Option(False, "--json"),
+):
+    """Manage agents (list | create | disable | enable | show)."""
+    async def _main():
+        svc = await _load_svc()
+        if action == "list":
+            rows = await svc.agent_registry.list()
+            if json_output:
+                typer.echo(json.dumps([a.model_dump() for a in rows], indent=2, default=str))
+                return
+            typer.echo(f"{'ID':<24} {'NAME':<28} {'ROLE':<24} {'PARENT':<20} {'TIER':<4} {'ENABLED'}")
+            typer.echo("-" * 110)
+            for a in rows:
+                typer.echo(f"{a.id:<24} {a.name:<28} {a.role:<24} "
+                           f"{(a.parent_agent or ''):<20} {a.model_policy.get('tier',''):<4} {a.enabled}")
+        elif action == "create":
+            from agentos.domain.models import AgentDef
+
+            agent = AgentDef(id=agent_id or typer.prompt("agent id"),
+                             name=name or typer.prompt("name"),
+                             role=role or typer.prompt("role"),
+                             parent_agent=parent)
+            await svc.agent_registry.create(agent)
+            typer.echo(f"Created agent {agent.id}")
+        elif action in ("disable", "enable"):
+            await svc.agent_registry.disable(agent_id or "", enabled=(action == "enable"))
+            typer.echo(f"{'Enabled' if action == 'enable' else 'Disabled'} {agent_id}")
+        elif action == "show":
+            agent = await svc.agent_registry.get(agent_id or "")
+            if not agent:
+                typer.echo(f"agent {agent_id} not found")
+                return
+            typer.echo(json.dumps(agent.model_dump(), indent=2, default=str))
+
+    _run(_main())
+
+
+# ---------------------------------------------------------------------------
+# Skills
+# ---------------------------------------------------------------------------
+
+@app.command()
+def skills(action: str = typer.Argument(..., help="list | enable | disable | search"),
+           query: Optional[str] = typer.Argument(None),
+           category: Optional[str] = typer.Option(None, "--category")):
+    """Manage skills (list | enable | disable | search)."""
+    async def _main():
+        svc = await _load_svc()
+        if action == "list":
+            rows = await svc.skill_registry.list(category=category)
+            typer.echo(f"{'ID':<32} {'CATEGORY':<22} {'ENABLED':<8} NAME")
+            for s in rows:
+                typer.echo(f"{s.id:<32} {s.category:<22} {str(s.enabled):<8} {s.name}")
+        elif action == "search":
+            for s in await svc.skill_registry.search(query or "", limit=15):
+                typer.echo(f"  {s.id:<32} {s.name}  ({s.category})")
+        elif action in ("enable", "disable"):
+            await svc.skill_registry.enable(query or "", enabled=(action == "enable"))
+            typer.echo(f"{action}d {query}")
+        elif action == "reload":
+            count = await svc.skill_registry.load_from_disk()
+            typer.echo(f"Indexed {count} skills from disk")
+
+    _run(_main())
+
+
+# ---------------------------------------------------------------------------
+# Projects / tasks
+# ---------------------------------------------------------------------------
+
+@app.command()
+def projects(action: str = typer.Argument(..., help="list | create | show"),
+             name: Optional[str] = typer.Argument(None),
+             objective: Optional[str] = typer.Option(None, "--objective"),
+             project_id: Optional[str] = typer.Option(None, "--id")):
+    """Manage projects (list | create | show)."""
+    async def _main():
+        svc = await _load_svc()
+        if action == "list":
+            for p in await svc.projects.list():
+                typer.echo(f"{p.project_id:<18} {p.status.value:<12} {p.name} — {p.objective[:60]}")
+        elif action == "create":
+            project = await svc.projects.create(name or "Untitled", objective or "")
+            typer.echo(f"Created {project.project_id}")
+        elif action == "show":
+            project = await svc.projects.get(project_id or "")
+            if not project:
+                typer.echo("not found")
+                return
+            typer.echo(json.dumps(project.model_dump(), indent=2, default=str))
+
+    _run(_main())
+
+
+@app.command()
+def tasks(action: str = typer.Argument(..., help="list | create | show | retry"),
+          project_id: Optional[str] = typer.Argument(None),
+          title: Optional[str] = typer.Option(None, "--title"),
+          agent: Optional[str] = typer.Option(None, "--agent"),
+          status: Optional[str] = typer.Option(None, "--status")):
+    """Manage tasks (list | create | show | retry)."""
+    async def _main():
+        svc = await _load_svc()
+        if action == "list":
+            from agentos.domain.models import TaskStatus
+
+            rows = await svc.tasks.list(status=TaskStatus(status) if status else None,
+                                        project_id=project_id)
+            for t in rows[:40]:
+                typer.echo(f"{t.task_id:<16} {t.status.value:<16} {t.assigned_agent or '-':<20} {t.title[:50]}")
+            if len(rows) > 40:
+                typer.echo(f"… {len(rows) - 40} more")
+        elif action == "create":
+            task = await svc.tasks.create(project_id or "none", title or "Untitled",
+                                          assigned_agent=agent)
+            typer.echo(f"Created {task.task_id}")
+        elif action == "show":
+            task = await svc.tasks.get(project_id or "")
+            if not task:
+                typer.echo("not found")
+                return
+            typer.echo(json.dumps(task.model_dump(), indent=2, default=str))
+        elif action == "retry":
+            task = await svc.tasks.get(project_id or "")
+            if not task:
+                typer.echo("not found")
+                return
+            await svc.tasks.set_status(task.task_id, task.status)
+            await svc.queue.enqueue({"task_id": task.task_id})
+            typer.echo(f"Re-queued {task.task_id}")
+
+    _run(_main())
+
+
+# ---------------------------------------------------------------------------
+# Models / budget / mcp / apis / workflows
+# ---------------------------------------------------------------------------
+
+@app.command()
+def models():
+    """List configured models."""
+    async def _main():
+        svc = await _load_svc()
+        typer.echo(f"{'ID':<18} {'PROVIDER':<14} {'TIER':<4} {'IN$/1M':<8} {'OUT$/1M':<8} {'ENABLED'}")
+        for m in await svc.model_registry.list():
+            typer.echo(f"{m.id:<18} {m.provider:<14} {m.tier:<4} "
+                       f"{m.price_in_per_million:<8} {m.price_out_per_million:<8} {m.enabled}")
+
+    _run(_main())
+
+
+@app.command()
+def budget(action: str = typer.Argument(..., help="status | set")):
+    """Budget status and limits."""
+    async def _main():
+        svc = await _load_svc()
+        for b in await svc.budgets.summary():
+            typer.echo(f"  {b['scope']:<8} {b['scope_id']:<20} "
+                       f"month ${b['spent_month']:.3f}/{b['monthly_limit'] or '∞'} "
+                       f"day ${b['spent_day']:.3f}/{b['daily_limit'] or '∞'}")
+
+    _run(_main())
+
+
+@app.command()
+def mcp(action: str = typer.Argument(..., help="list | register"),
+        name: Optional[str] = typer.Argument(None),
+        endpoint: Optional[str] = typer.Option(None, "--endpoint")):
+    """Manage MCP servers (list | register)."""
+    async def _main():
+        svc = await _load_svc()
+        if action == "list":
+            for s in await svc.mcp_registry.list():
+                typer.echo(f"{s.name:<20} {s.transport:<16} {s.endpoint or s.command or ''} "
+                           f"tools={len(s.tools)} enabled={s.enabled}")
+        elif action == "register":
+            from agentos.domain.models import McpServer
+
+            server = McpServer(name=name or "server", endpoint=endpoint)
+            await svc.mcp_registry.register(server)
+            typer.echo(f"Registered MCP server {server.name}")
+
+    _run(_main())
+
+
+@app.command()
+def apis():
+    """List the API catalog with evaluations."""
+    async def _main():
+        svc = await _load_svc()
+        for api in await svc.api_registry.list():
+            ev = svc.api_registry.evaluate(api)
+            typer.echo(f"  {api.api:<16} {ev['verdict']:<12} score={ev['score']:<5} "
+                       f"auth={api.authentication:<8} pricing={api.pricing:<8} {api.description[:60]}")
+
+    _run(_main())
+
+
+@app.command()
+def workflows(action: str = typer.Argument(..., help="list | run"),
+              workflow_id: Optional[str] = typer.Argument(None),
+              project_id: Optional[str] = typer.Option(None, "--project"),
+              goal: Optional[str] = typer.Option(None, "--goal")):
+    """Manage workflows (list | run)."""
+    async def _main():
+        svc = await _load_svc()
+        if action == "list":
+            for w in await svc.workflow_registry.list():
+                stages = ", ".join(s.stage_id for s in w.stages)
+                typer.echo(f"{w.workflow_id:<16} {w.name:<28} [{stages}]")
+        elif action == "run":
+            if not project_id:
+                project = await svc.projects.create(goal or "Workflow project",
+                                                    goal or "Run " + (workflow_id or ""))
+                project_id = project.project_id
+            result = await svc.engine.run_workflow(workflow_id or "", project_id)
+            typer.echo(f"run {result.get('run_id')} → {result.get('status')}")
+
+    _run(_main())
+
+
+# ---------------------------------------------------------------------------
+# Events / audit / approvals / memory
+# ---------------------------------------------------------------------------
+
+@app.command()
+def events(limit: int = typer.Option(20, "--limit")):
+    """Tail recent system events."""
+    async def _main():
+        svc = await _load_svc()
+        for e in await svc.events.recent(limit=limit):
+            typer.echo(f"  {e.ts.isoformat()[:19]} {e.type:<28} {e.severity:<7} "
+                       f"{(e.agent_id or e.project_id or '')[:24]}")
+
+    _run(_main())
+
+
+@app.command()
+def audit(limit: int = typer.Option(20, "--limit")):
+    """Tail the audit log."""
+    async def _main():
+        svc = await _load_svc()
+        for e in await svc.audit.query(limit=limit):
+            typer.echo(f"  {e.ts.isoformat()[:19]} {e.actor:<20} {e.action:<22} "
+                       f"{e.tool or '':<16} {e.result:<6} {e.target[:40]}")
+
+    _run(_main())
+
+
+@app.command()
+def approvals(action: str = typer.Argument(..., help="list | approve | reject"),
+              approval_id: Optional[str] = typer.Argument(None)):
+    """Human approval queue (list | approve | reject)."""
+    async def _main():
+        svc = await _load_svc()
+        if action == "list":
+            rows = await svc.approvals.all()
+            for a in rows:
+                typer.echo(f"  {a.approval_id:<18} {a.status.value:<12} {a.risk_level:<6} "
+                           f"{a.action:<32} {a.agent_name}")
+        elif action in ("approve", "reject"):
+            await svc.engine.approve(approval_id or "", action, decided_by="cli")
+            typer.echo(f"{action}d {approval_id}")
+
+    _run(_main())
+
+
+@app.command()
+def memory(limit: int = typer.Option(30, "--limit")):
+    """List persisted memory entries."""
+    async def _main():
+        svc = await _load_svc()
+        for m in await svc.memory.all(limit=limit):
+            typer.echo(f"  [{m.scope.value:<7}] {m.owner_id:<24} {m.kind:<10} "
+                       f"i={m.importance} {m.content[:80]}")
+
+    _run(_main())
+
+
+# ---------------------------------------------------------------------------
+# Goals / demo / seed
+# ---------------------------------------------------------------------------
+
+@app.command()
+def ask(goal: str = typer.Argument(..., help="The goal to give the AI organization")):
+    """Give the executive a goal; it creates a project and runs the workflow."""
+    async def _main():
+        svc = await _load_svc()
+        typer.echo(f"🧠 Executive processing: {goal[:80]}…")
+        result = await svc.engine.execute_goal(goal, user_id="cli")
+        typer.echo(f"  project: {result['project_id']}")
+        typer.echo(f"  run:     {result['run_id']} → {result['status']}")
+        if result["status"] == "awaiting_approval":
+            typer.echo("  ⚠️ awaiting human approval — use `agent-os approvals list`")
+
+    _run(_main())
+
+
+@app.command()
+def demo(auto_approve: bool = typer.Option(True, "--no-approve/--approve",
+                                           help="Auto-approve approval gates")):
+    """Run the offline end-to-end demonstration project."""
+    from agentos.scripts.demo import run_demo
+
+    _run(run_demo(auto_approve=auto_approve))
+
+
+@app.command()
+def seed(project: bool = typer.Option(True, "--no-project/--project",
+                                      help="Also seed the demo project")):
+    """Seed registries (and optionally the demo project)."""
+    from agentos.scripts.seed import run_seed
+
+    _run(run_seed(with_project=project))
+
+
+def main() -> None:
+    app()
+
+
+if __name__ == "__main__":
+    main()

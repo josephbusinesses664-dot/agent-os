@@ -1,0 +1,1 @@
+"""Mattermost integration — the human-facing interface."""

@@ -1,0 +1,1 @@
+"""Capability registries: agents, skills, tools, MCP servers, APIs, models."""

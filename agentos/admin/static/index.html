@@ -1,0 +1,572 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agent OS — Control Plane</title>
+<style>
+  :root {
+    --bg: #0b0e14;
+    --bg-elev: #11151f;
+    --bg-elev2: #161b28;
+    --border: #232a3a;
+    --text: #e7ecf5;
+    --text-dim: #9aa7bd;
+    --text-faint: #5d6b83;
+    --accent: #6c8cff;
+    --accent-soft: rgba(108,140,255,.12);
+    --green: #38d39f;
+    --yellow: #f0c04b;
+    --orange: #f0944b;
+    --red: #f05d5d;
+    --purple: #a78bfa;
+    --radius: 10px;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Inter, sans-serif;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--sans);
+    font-size: 14px;
+    line-height: 1.5;
+    display: flex;
+  }
+  a { color: var(--accent); text-decoration: none; }
+
+  /* ---- sidebar ---- */
+  nav {
+    width: 220px;
+    flex-shrink: 0;
+    background: var(--bg-elev);
+    border-right: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    padding: 20px 12px;
+    gap: 2px;
+    position: sticky;
+    top: 0;
+    height: 100vh;
+    overflow-y: auto;
+  }
+  .brand {
+    display: flex; align-items: center; gap: 10px;
+    padding: 0 10px 18px;
+    font-weight: 700; font-size: 15px; letter-spacing: .2px;
+  }
+  .brand .dot {
+    width: 10px; height: 10px; border-radius: 50%;
+    background: var(--green);
+    box-shadow: 0 0 12px rgba(56,211,159,.7);
+    animation: pulse 2.4s ease-in-out infinite;
+  }
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .45; } }
+  nav a {
+    display: flex; align-items: center; gap: 9px;
+    padding: 8px 10px; border-radius: 8px;
+    color: var(--text-dim); font-weight: 500; font-size: 13px;
+    transition: background .15s ease, color .15s ease;
+  }
+  nav a:hover { background: var(--bg-elev2); color: var(--text); }
+  nav a.active { background: var(--accent-soft); color: var(--accent); }
+  nav .section { font-size: 10.5px; text-transform: uppercase; letter-spacing: .08em;
+    color: var(--text-faint); padding: 16px 10px 6px; }
+  nav .foot { margin-top: auto; padding: 12px 10px 0; font-size: 11px; color: var(--text-faint); }
+
+  /* ---- main ---- */
+  main { flex: 1; padding: 28px 34px 80px; max-width: 1200px; min-width: 0; }
+  header.top { display: flex; align-items: baseline; justify-content: space-between;
+    margin-bottom: 26px; gap: 16px; flex-wrap: wrap; }
+  h1 { font-size: 21px; font-weight: 700; letter-spacing: -.2px; }
+  h2 { font-size: 15px; font-weight: 650; margin: 28px 0 12px; letter-spacing: -.1px; }
+  .sub { color: var(--text-dim); font-size: 13px; }
+  .pill { font-family: var(--mono); font-size: 11.5px; color: var(--text-dim);
+    background: var(--bg-elev); border: 1px solid var(--border);
+    padding: 3px 9px; border-radius: 999px; }
+  .pill.ok { color: var(--green); border-color: rgba(56,211,159,.35); }
+  .pill.bad { color: var(--red); border-color: rgba(240,93,93,.4); }
+
+  /* ---- stat cards ---- */
+  .grid { display: grid; gap: 14px; }
+  .stats { grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); margin-bottom: 10px; }
+  .card {
+    background: var(--bg-elev); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 16px;
+  }
+  .stat .label { font-size: 11px; text-transform: uppercase; letter-spacing: .06em;
+    color: var(--text-faint); margin-bottom: 6px; }
+  .stat .value { font-size: 26px; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .stat .value.small { font-size: 18px; }
+  .stat .hint { font-size: 11.5px; color: var(--text-faint); margin-top: 2px; }
+
+  /* ---- tables ---- */
+  .table-wrap { overflow-x: auto; border: 1px solid var(--border);
+    border-radius: var(--radius); background: var(--bg-elev); }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th { text-align: left; font-size: 10.5px; text-transform: uppercase; letter-spacing: .07em;
+    color: var(--text-faint); padding: 10px 14px; border-bottom: 1px solid var(--border);
+    white-space: nowrap; }
+  td { padding: 9px 14px; border-bottom: 1px solid rgba(35,42,58,.6); vertical-align: top; }
+  tr:last-child td { border-bottom: none; }
+  tr:hover td { background: rgba(255,255,255,.015); }
+  td.mono, .mono { font-family: var(--mono); font-size: 12px; }
+  .dim { color: var(--text-dim); }
+  .faint { color: var(--text-faint); }
+
+  /* ---- status dots ---- */
+  .st { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+  .st::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--text-faint); }
+  .st.working::before { background: var(--green); box-shadow: 0 0 8px rgba(56,211,159,.6); }
+  .st.idle::before { background: var(--text-faint); }
+  .st.awaiting_review::before, .st.awaiting_approval::before { background: var(--yellow); }
+  .st.blocked::before { background: var(--orange); }
+  .st.failed::before { background: var(--red); }
+  .st.paused::before { background: var(--purple); }
+  .st.completed::before { background: var(--green); }
+  .st.pending::before, .st.queued::before { background: var(--text-faint); }
+  .st.running::before { background: var(--accent); }
+  .st.cancelled::before { background: var(--text-faint); }
+
+  /* ---- buttons ---- */
+  .btn { font: inherit; font-size: 12.5px; font-weight: 600; cursor: pointer;
+    background: var(--bg-elev2); color: var(--text); border: 1px solid var(--border);
+    padding: 6px 12px; border-radius: 8px; transition: all .15s ease; }
+  .btn:hover { border-color: var(--accent); color: var(--accent); }
+  .btn.green { border-color: rgba(56,211,159,.4); color: var(--green); }
+  .btn.green:hover { background: rgba(56,211,159,.1); }
+  .btn.red { border-color: rgba(240,93,93,.4); color: var(--red); }
+  .btn.red:hover { background: rgba(240,93,93,.1); }
+  .btn-row { display: flex; gap: 8px; }
+
+  /* ---- bars (budget) ---- */
+  .bar { height: 8px; background: var(--bg-elev2); border-radius: 999px; overflow: hidden; margin-top: 6px; }
+  .bar > i { display: block; height: 100%; background: var(--accent); border-radius: 999px;
+    transition: width .5s cubic-bezier(.2,.8,.2,1); }
+  .bar.warn > i { background: var(--yellow); }
+  .bar.crit > i { background: var(--red); }
+
+  /* ---- events feed ---- */
+  .feed { display: flex; flex-direction: column; gap: 6px; max-height: 420px; overflow-y: auto; }
+  .feed .ev { display: flex; gap: 12px; align-items: baseline; font-family: var(--mono); font-size: 12px;
+    padding: 6px 10px; border-radius: 8px; background: var(--bg-elev); border: 1px solid var(--border); }
+  .ev .t { color: var(--text-faint); white-space: nowrap; }
+  .ev .ty { color: var(--accent); white-space: nowrap; }
+  .ev .sev-error { color: var(--red); } .ev .sev-warning { color: var(--yellow); }
+  .ev .msg { color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  .empty { color: var(--text-faint); text-align: center; padding: 28px 0; font-size: 13px; }
+  .filters { display: flex; gap: 10px; align-items: center; margin-bottom: 12px; flex-wrap: wrap; }
+  select, input[type=text] { font: inherit; font-size: 12.5px; color: var(--text);
+    background: var(--bg-elev); border: 1px solid var(--border); border-radius: 8px;
+    padding: 6px 10px; outline: none; }
+  select:focus, input[type=text]:focus { border-color: var(--accent); }
+  section.view { display: none; }
+  section.view.active { display: block; }
+  @media (max-width: 820px) {
+    nav { width: 64px; padding: 16px 8px; }
+    nav .brand span, nav a span, nav .section, nav .foot { display: none; }
+    main { padding: 20px 16px 60px; }
+  }
+</style>
+</head>
+<body>
+<nav id="nav">
+  <div class="brand"><span class="dot"></span><span>Agent OS</span></div>
+  <div class="section">System</div>
+  <a href="#overview" data-view="overview" class="active">Overview</a>
+  <a href="#health" data-view="health">Health</a>
+  <a href="#agents" data-view="agents">Agents</a>
+  <a href="#tasks" data-view="tasks">Tasks</a>
+  <a href="#projects" data-view="projects">Projects</a>
+  <div class="section">Capabilities</div>
+  <a href="#skills" data-view="skills">Skills</a>
+  <a href="#models" data-view="models">Models</a>
+  <a href="#mcp" data-view="mcp">MCP &amp; APIs</a>
+  <a href="#budget" data-view="budget">Budget</a>
+  <div class="section">Governance</div>
+  <a href="#approvals" data-view="approvals">Approvals</a>
+  <a href="#events" data-view="events">Events</a>
+  <a href="#audit" data-view="audit">Audit Log</a>
+  <div class="foot">v0.1.0 · prem-ium.inc</div>
+</nav>
+
+<main>
+  <header class="top">
+    <div>
+      <h1 id="page-title">Overview</h1>
+      <div class="sub" id="page-sub">AI Agency Operating System</div>
+    </div>
+    <div class="btn-row">
+      <span class="pill" id="mattermost-pill">mattermost …</span>
+      <span class="pill ok" id="last-updated">…</span>
+      <button class="btn" id="refresh-btn" onclick="loadAll()">Refresh</button>
+    </div>
+  </header>
+
+  <!-- OVERVIEW -->
+  <section class="view active" id="view-overview">
+    <div class="grid stats" id="stat-cards"></div>
+    <h2>Agent status</h2>
+    <div class="table-wrap" id="agent-status-table"></div>
+    <h2>Recent events</h2>
+    <div class="feed" id="overview-events"></div>
+  </section>
+
+  <!-- HEALTH -->
+  <section class="view" id="view-health">
+    <div class="table-wrap" id="health-table"></div>
+    <h2>Service layout</h2>
+    <div class="card"><div class="sub" id="health-detail"></div></div>
+  </section>
+
+  <!-- AGENTS -->
+  <section class="view" id="view-agents">
+    <div class="filters">
+      <input type="text" id="agent-filter" placeholder="Filter by id/role…" oninput="filterAgents()">
+      <span class="pill" id="agent-count"></span>
+    </div>
+    <div class="table-wrap" id="agents-table"></div>
+  </section>
+
+  <!-- TASKS -->
+  <section class="view" id="view-tasks">
+    <div class="filters">
+      <select id="task-status" onchange="loadTasks()">
+        <option value="">all statuses</option>
+        <option>pending</option><option>queued</option><option>running</option>
+        <option>blocked</option><option>awaiting_review</option><option>awaiting_approval</option>
+        <option>completed</option><option>failed</option><option>cancelled</option>
+      </select>
+      <span class="pill" id="task-count"></span>
+    </div>
+    <div class="table-wrap" id="tasks-table"></div>
+  </section>
+
+  <!-- PROJECTS -->
+  <section class="view" id="view-projects">
+    <div class="table-wrap" id="projects-table"></div>
+  </section>
+
+  <!-- SKILLS -->
+  <section class="view" id="view-skills">
+    <div class="filters">
+      <input type="text" id="skill-filter" placeholder="Filter skills…" oninput="filterSkills()">
+      <span class="pill" id="skill-count"></span>
+    </div>
+    <div class="table-wrap" id="skills-table"></div>
+  </section>
+
+  <!-- MODELS -->
+  <section class="view" id="view-models">
+    <div class="table-wrap" id="models-table"></div>
+  </section>
+
+  <!-- MCP / APIS -->
+  <section class="view" id="view-mcp">
+    <h2>MCP servers</h2>
+    <div class="table-wrap" id="mcp-table"></div>
+    <h2>API catalog</h2>
+    <div class="table-wrap" id="apis-table"></div>
+  </section>
+
+  <!-- BUDGET -->
+  <section class="view" id="view-budget">
+    <div class="grid stats" id="budget-cards"></div>
+    <h2>Usage records</h2>
+    <div class="table-wrap" id="usage-table"></div>
+  </section>
+
+  <!-- APPROVALS -->
+  <section class="view" id="view-approvals">
+    <div class="table-wrap" id="approvals-table"></div>
+  </section>
+
+  <!-- EVENTS -->
+  <section class="view" id="view-events">
+    <div class="filters">
+      <select id="event-filter" onchange="loadEvents()">
+        <option value="">all events</option>
+        <option>workflow.started</option><option>workflow.completed</option>
+        <option>workflow.failed</option><option>stage.completed</option>
+        <option>task.completed</option><option>task.failed</option>
+        <option>approval.requested</option><option>approval.granted</option>
+        <option>approval.rejected</option><option>model.failover</option>
+        <option>budget.warning</option><option>project.created</option>
+      </select>
+    </div>
+    <div class="feed" id="events-feed" style="max-height:70vh"></div>
+  </section>
+
+  <!-- AUDIT -->
+  <section class="view" id="view-audit">
+    <div class="table-wrap" id="audit-table"></div>
+  </section>
+</main>
+
+<script>
+const $ = (s, el=document) => el.querySelector(s);
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const time = ts => { try { return new Date(ts).toLocaleString(); } catch { return ts; } };
+const money = n => "$" + Number(n || 0).toFixed(4);
+
+let API = "";
+let VIEWS = ["overview","health","agents","tasks","projects","skills","models","mcp","budget","approvals","events","audit"];
+
+function showView(name) {
+  document.querySelectorAll("section.view").forEach(s => s.classList.remove("active"));
+  $("#view-" + name).classList.add("active");
+  document.querySelectorAll("nav a").forEach(a => a.classList.toggle("active", a.dataset.view === name));
+  $("#page-title").textContent = name[0].toUpperCase() + name.slice(1);
+  loadView(name);
+}
+window.addEventListener("hashchange", () => {
+  const v = location.hash.slice(1);
+  if (VIEWS.includes(v)) showView(v);
+});
+
+function loadView(name) {
+  ({overview: loadOverview, health: loadHealth, agents: loadAgents, tasks: loadTasks,
+    projects: loadProjects, skills: loadSkills, models: loadModels, mcp: loadMcp,
+    budget: loadBudget, approvals: loadApprovals, events: loadEvents, audit: loadAudit})[name]?.();
+}
+
+async function get(path) {
+  const r = await fetch(API + path);
+  if (!r.ok) throw new Error(path + " → " + r.status);
+  return r.json();
+}
+
+// ---------- overview ----------
+async function loadOverview() {
+  try {
+    const [status, events] = await Promise.all([get("/api/status"), get("/api/events?limit=8")]);
+    $("#mattermost-pill").textContent = status.mattermost ? "mattermost online" : "mattermost offline";
+    $("#mattermost-pill").className = "pill " + (status.mattermost ? "ok" : "bad");
+    $("#stat-cards").innerHTML = [
+      ["Agents", status.agents.available, status.agents.active + " active"],
+      ["Tasks", status.tasks, status.approvals_pending + " approvals pending"],
+      ["Projects", status.projects, status.workflows + " workflows"],
+      ["Skills", status.skills, status.tools + " tools"],
+      ["Models", status.models, status.mcp + " MCP servers"],
+      ["Spend (month)", money(status.budget_spent_month), "global budget"],
+    ].map(([l,v,h]) => `<div class="card stat"><div class="label">${l}</div>
+      <div class="value">${v}</div><div class="hint">${h}</div></div>`).join("");
+
+    const instances = status.agents.instances || [];
+    const emoji = {idle:"⚪",working:"🟢",awaiting_review:"🟡",awaiting_approval:"🟠",blocked:"🟠",failed:"🔴",paused:"⏸",offline:"⚫"};
+    const rows = (await get("/api/agents")).map(a => {
+      const inst = instances.find(i => i.agent_id === a.id) || {};
+      return `<tr><td class="st ${inst.status||"idle"}">${emoji[inst.status]||"⚪"} ${esc(a.name)}</td>
+        <td class="dim">${esc(a.role)}</td><td class="mono dim">${esc(a.id)}</td>
+        <td class="mono">${esc(inst.model || a.model_policy?.tier || "")}</td>
+        <td class="dim">${esc((inst.latest_action||"").slice(0,60))}</td></tr>`;
+    }).join("");
+    $("#agent-status-table").innerHTML = rows
+      ? `<table><thead><tr><th>Agent</th><th>Role</th><th>Id</th><th>Model</th><th>Latest action</th></tr></thead><tbody>${rows}</tbody></table>`
+      : `<div class="empty">no agents</div>`;
+
+    $("#overview-events").innerHTML = events.map(e => evRow(e)).join("") || `<div class="empty">no events yet</div>`;
+  } catch (err) { $("#stat-cards").innerHTML = `<div class="card"><div class="sub">${esc(err.message)}</div></div>`; }
+}
+
+function evRow(e) {
+  const msg = JSON.stringify(e.payload || {}).slice(0, 110);
+  return `<div class="ev"><span class="t">${time(e.ts)}</span><span class="ty">${esc(e.type)}</span>
+    <span class="sev-${esc(e.severity)}">${esc(e.severity)}</span><span class="msg">${esc(msg)}</span></div>`;
+}
+
+// ---------- health ----------
+async function loadHealth() {
+  const h = await get("/api/health");
+  const rows = h.services.map(s =>
+    `<tr><td class="mono">${esc(s.service)}</td><td class="st ${esc(s.status)}">${esc(s.status)}</td>
+     <td class="mono dim">${s.latency_ms}ms</td><td class="dim">${esc(s.detail)}</td></tr>`).join("");
+  $("#health-table").innerHTML = `<table><thead><tr><th>Service</th><th>Status</th><th>Latency</th><th>Detail</th></tr></thead><tbody>${rows}</tbody></table>`;
+  $("#health-detail").textContent = "Overall: " + h.overall + " — run `agent-os health` from the CLI for the full report.";
+}
+
+// ---------- agents ----------
+let ALL_AGENTS = [];
+async function loadAgents() {
+  ALL_AGENTS = await get("/api/agents");
+  renderAgents();
+}
+function renderAgents() {
+  const q = ($("#agent-filter").value || "").toLowerCase();
+  const rows = ALL_AGENTS.filter(a => (a.id + " " + a.role + " " + a.name).toLowerCase().includes(q))
+    .map(a => `<tr>
+      <td class="mono">${esc(a.id)}</td><td>${esc(a.name)}</td><td class="dim">${esc(a.role)}</td>
+      <td class="mono dim">${esc(a.parent_agent || "—")}</td>
+      <td class="mono">${esc(a.model_policy?.tier || "")}</td>
+      <td>${a.enabled ? '<span class="st completed">enabled</span>' : '<span class="st failed">disabled</span>'}</td>
+      <td>${a.risk_level}</td>
+      <td>${esc((a.permissions && Object.entries(a.permissions).filter(([,v])=>v==="allow").map(([k])=>k).join(", ")) || "")}</td>
+    </tr>`).join("");
+  $("#agent-count").textContent = ALL_AGENTS.length + " agents";
+  $("#agents-table").innerHTML = `<table><thead><tr><th>Id</th><th>Name</th><th>Role</th><th>Parent</th>
+    <th>Tier</th><th>State</th><th>Risk</th><th>Allowed tools</th></tr></thead><tbody>${rows}</tbody></table>`;
+}
+function filterAgents() { renderAgents(); }
+
+// ---------- tasks ----------
+async function loadTasks() {
+  const status = $("#task-status").value;
+  let tasks = await get("/api/tasks?limit=300" + (status ? "&status=" + status : ""));
+  $("#task-count").textContent = tasks.length + " tasks";
+  const rows = tasks.slice(0, 150).map(t => `<tr>
+    <td class="mono faint">${esc(t.task_id)}</td><td>${esc(t.title)}</td>
+    <td class="mono dim">${esc(t.assigned_agent || "—")}</td>
+    <td><span class="st ${esc(t.status)}">${esc(t.status)}</span></td>
+    <td class="dim">${esc(t.priority)}</td>
+    <td class="mono dim">${esc(t.model_used || "—")}</td>
+    <td class="mono dim">${money(t.cost)}</td>
+    <td class="faint">${esc((t.dependencies||[]).join(", "))}</td>
+  </tr>`).join("");
+  $("#tasks-table").innerHTML = `<table><thead><tr><th>Id</th><th>Title</th><th>Agent</th><th>Status</th>
+    <th>Priority</th><th>Model</th><th>Cost</th><th>Depends on</th></tr></thead><tbody>${rows}</tbody></table>`;
+}
+
+// ---------- projects ----------
+async function loadProjects() {
+  const projects = await get("/api/projects");
+  const rows = projects.map(p => `<tr>
+    <td class="mono">${esc(p.project_id)}</td><td>${esc(p.name)}</td>
+    <td class="dim">${esc(p.objective.slice(0,80))}</td>
+    <td><span class="st ${esc(p.status)}">${esc(p.status)}</span></td>
+    <td class="mono dim">${esc(p.stage || "—")}</td>
+    <td class="dim">${esc(p.workflow_id || "—")}</td>
+    <td class="mono dim">${money(p.cost)} / ${money(p.budget)}</td>
+    <td class="faint">${p.artifacts.length} artifacts</td>
+  </tr>`).join("");
+  $("#projects-table").innerHTML = `<table><thead><tr><th>Id</th><th>Name</th><th>Objective</th><th>Status</th>
+    <th>Stage</th><th>Workflow</th><th>Cost / Budget</th><th>Artifacts</th></tr></thead><tbody>${rows}</tbody></table>`;
+}
+
+// ---------- skills ----------
+let ALL_SKILLS = [];
+async function loadSkills() {
+  ALL_SKILLS = await get("/api/skills");
+  renderSkills();
+}
+function renderSkills() {
+  const q = ($("#skill-filter").value || "").toLowerCase();
+  const rows = ALL_SKILLS.filter(s => (s.id + " " + s.name + " " + s.description).toLowerCase().includes(q))
+    .map(s => `<tr>
+      <td class="mono">${esc(s.id)}</td><td>${esc(s.name)}</td>
+      <td class="mono dim">${esc(s.category)}</td>
+      <td class="dim">${esc(s.description.slice(0,90))}</td>
+      <td>${s.enabled ? '<span class="st completed">on</span>' : '<span class="st failed">off</span>'}</td>
+      <td class="mono dim">${esc((s.required_tools||[]).join(", "))}</td>
+    </tr>`).join("");
+  $("#skill-count").textContent = ALL_SKILLS.length + " skills";
+  $("#skills-table").innerHTML = `<table><thead><tr><th>Id</th><th>Name</th><th>Category</th>
+    <th>Description</th><th>State</th><th>Required tools</th></tr></thead><tbody>${rows}</tbody></table>`;
+}
+function filterSkills() { renderSkills(); }
+
+// ---------- models ----------
+async function loadModels() {
+  const models = await get("/api/models");
+  const rows = models.map(m => `<tr>
+    <td class="mono">${esc(m.id)}</td><td class="mono dim">${esc(m.provider)}</td>
+    <td class="mono">${esc(m.tier)}</td><td class="mono dim">${m.context_window.toLocaleString()}</td>
+    <td class="mono dim">${m.price_in_per_million}</td><td class="mono dim">${m.price_out_per_million}</td>
+    <td>${m.enabled ? '<span class="st completed">on</span>' : '<span class="st failed">off</span>'}</td>
+    <td class="faint">${esc((m.fallbacks||[]).join(", "))}</td>
+  </tr>`).join("");
+  $("#models-table").innerHTML = `<table><thead><tr><th>Id</th><th>Provider</th><th>Tier</th><th>Context</th>
+    <th>$ in /1M</th><th>$ out /1M</th><th>State</th><th>Fallbacks</th></tr></thead><tbody>${rows}</tbody></table>`;
+}
+
+// ---------- mcp / apis ----------
+async function loadMcp() {
+  const [mcp, apis] = await Promise.all([get("/api/mcp"), get("/api/apis")]);
+  $("#mcp-table").innerHTML = `<table><thead><tr><th>Server</th><th>Transport</th><th>Endpoint</th>
+    <th>Tools</th><th>Risk</th><th>State</th></tr></thead><tbody>` +
+    mcp.map(s => `<tr><td class="mono">${esc(s.name)}</td><td class="dim">${esc(s.transport)}</td>
+      <td class="mono dim">${esc(s.endpoint || s.command || "—")}</td>
+      <td class="dim">${esc((s.tools||[]).join(", "))}</td><td>${esc(s.risk_level)}</td>
+      <td>${s.enabled ? '<span class="st completed">on</span>' : '<span class="st failed">off</span>'}</td></tr>`).join("") + `</tbody></table>`;
+  $("#apis-table").innerHTML = `<table><thead><tr><th>API</th><th>Verdict</th><th>Score</th><th>Auth</th>
+    <th>Pricing</th><th>Description</th></tr></thead><tbody>` +
+    apis.map(a => `<tr><td class="mono">${esc(a.api.api)}</td>
+      <td class="dim">${esc(a.evaluation.verdict)}</td><td class="mono">${a.evaluation.score}</td>
+      <td class="mono dim">${esc(a.api.authentication)}</td><td class="dim">${esc(a.api.pricing)}</td>
+      <td class="dim">${esc(a.api.description.slice(0,80))}</td></tr>`).join("") + `</tbody></table>`;
+}
+
+// ---------- budget ----------
+async function loadBudget() {
+  const [budget, usage] = await Promise.all([get("/api/budget"), get("/api/usage?limit=50")]);
+  const cards = budget.budgets.map(b => {
+    const pct = b.monthly_limit ? Math.min(100, (b.spent_month / b.monthly_limit) * 100) : 0;
+    const cls = pct > 90 ? "crit" : pct > 70 ? "warn" : "";
+    return `<div class="card stat"><div class="label">${esc(b.scope)} · ${esc(b.scope_id)}</div>
+      <div class="value small">${money(b.spent_month)}<span class="hint"> / ${b.monthly_limit ? money(b.monthly_limit) : "∞"}</span></div>
+      <div class="bar ${cls}"><i style="width:${pct}%"></i></div>
+      <div class="hint">day: ${money(b.spent_day)}${b.daily_limit ? " / " + money(b.daily_limit) : ""}</div></div>`;
+  }).join("");
+  $("#budget-cards").innerHTML = cards || `<div class="card"><div class="empty">no budgets yet</div></div>`;
+  $("#usage-table").innerHTML = `<table><thead><tr><th>Time</th><th>Model</th><th>Provider</th>
+    <th>Tokens</th><th>Cost</th><th>Agent</th></tr></thead><tbody>` +
+    usage.map(u => `<tr><td class="t mono faint">${time(u.ts)}</td><td class="mono">${esc(u.model)}</td>
+      <td class="mono dim">${esc(u.provider)}</td><td class="mono dim">${(u.prompt_tokens||0)+(u.completion_tokens||0)}</td>
+      <td class="mono">${money(u.estimated_cost)}</td><td class="mono dim">${esc(u.agent_id || "—")}</td></tr>`).join("") + `</tbody></table>`;
+}
+
+// ---------- approvals ----------
+async function loadApprovals() {
+  const rows = await get("/api/approvals?pending_only=false");
+  const html = rows.length === 0 ? `<div class="empty">no approvals recorded</div>` :
+    `<table><thead><tr><th>Id</th><th>Agent</th><th>Action</th><th>Risk</th><th>Status</th>
+     <th>Reason</th><th>Decision</th></tr></thead><tbody>` +
+    rows.map(a => `<tr>
+      <td class="mono">${esc(a.approval_id)}</td><td>${esc(a.agent_name)}</td>
+      <td class="mono dim">${esc(a.action)}</td><td>${esc(a.risk_level)}</td>
+      <td><span class="st ${esc(a.status)}">${esc(a.status)}</span></td>
+      <td class="dim">${esc((a.reason||"").slice(0,70))}</td>
+      <td>${a.status === "pending" ? `<div class="btn-row">
+        <button class="btn green" onclick="decide('${a.approval_id}','approved')">Approve</button>
+        <button class="btn red" onclick="decide('${a.approval_id}','rejected')">Reject</button></div>` : `<span class="faint">${esc(a.decided_by || "—")}</span>`}</td>
+    </tr>`).join("") + `</tbody></table>`;
+  $("#approvals-table").innerHTML = html;
+}
+async function decide(id, decision) {
+  await fetch(API + "/api/approvals/" + id + "/decide", {
+    method: "POST", headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({decision, decided_by: "admin-ui"}),
+  });
+  loadApprovals();
+}
+
+// ---------- events / audit ----------
+async function loadEvents() {
+  const filter = $("#event-filter").value;
+  const events = await get("/api/events?limit=150" + (filter ? "&event_type=" + filter : ""));
+  $("#events-feed").innerHTML = events.map(evRow).join("") || `<div class="empty">no events</div>`;
+}
+async function loadAudit() {
+  const rows = await get("/api/audit?limit=150");
+  $("#audit-table").innerHTML = `<table><thead><tr><th>Time</th><th>Actor</th><th>Action</th>
+    <th>Tool</th><th>Result</th><th>Target</th></tr></thead><tbody>` +
+    rows.map(e => `<tr><td class="t mono faint">${time(e.ts)}</td><td class="mono">${esc(e.actor)}</td>
+      <td>${esc(e.action)}</td><td class="mono dim">${esc(e.tool || "—")}</td>
+      <td><span class="st ${esc(e.result)}">${esc(e.result)}</span></td>
+      <td class="dim">${esc((e.target||"").slice(0,60))}</td></tr>`).join("") + `</tbody></table>`;
+}
+
+// ---------- boot ----------
+function loadAll() {
+  const v = location.hash.slice(1) || "overview";
+  if (!VIEWS.includes(v)) { location.hash = "overview"; return; }
+  loadView(v);
+  $("#last-updated").textContent = "updated " + new Date().toLocaleTimeString();
+}
+document.querySelectorAll("nav a").forEach(a => a.addEventListener("click", () => showView(a.dataset.view)));
+showView(location.hash.slice(1) || "overview");
+setInterval(loadAll, 6000);
+</script>
+</body>
+</html>

@@ -1,0 +1,1 @@
+"""External integrations: Mattermost, MCP, API catalog."""
