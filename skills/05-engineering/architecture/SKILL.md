@@ -12,6 +12,17 @@ risk_level: low
 cost_level: low
 tags: [architecture, design, tradeoffs]
 compatible_agents: [cto, software-architect]
+tools:
+  - name: arch.explore
+    description: "Search file contents under the project workspace to ground architecture decisions in the actual codebase."
+    handler_ref: repo.search
+    permission_key: repo.search
+    risk_level: low
+  - name: arch.tree
+    description: "List the project workspace file tree to understand module boundaries."
+    handler_ref: repo.tree
+    permission_key: repo.tree
+    risk_level: low
 ---
 
 # Software Architecture

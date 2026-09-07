@@ -13,6 +13,7 @@ import asyncio
 import json
 import logging
 import re
+import time
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
@@ -23,7 +24,6 @@ from agentos.domain.models import (
     Task,
     UsageRecord,
 )
-from agentos.tools.executor import ToolExecutor
 from agentos.models.router import ModelRouter
 from agentos.tools.executor import ToolExecutor
 
@@ -50,6 +50,9 @@ class RuntimeContext:
     event_bus: Any
     budget_manager: Any
     approved_tools: set[str] = field(default_factory=set)
+    active_skills: list = field(default_factory=list)
+    spawn_depth: int = 0
+    current_span: Optional[str] = None
 
 
 @dataclass
@@ -57,11 +60,14 @@ class AgentRunResult:
     content: str = ""
     artifacts: list[str] = field(default_factory=list)
     tool_calls: list[dict] = field(default_factory=list)
+    tool_results: list[dict] = field(default_factory=list)
     model: Optional[str] = None
     cost: float = 0.0
     usage: list[UsageRecord] = field(default_factory=list)
     error: Optional[str] = None
-    fail_class: Optional[str] = None  # transient | configuration | provider | permission | logic
+    fail_class: Optional[str] = None  # transient | configuration | provider | permission | logic | human_required
+    verified: bool = False
+    verification_note: str = ""
     reflection: dict[str, Any] = field(default_factory=dict)
 
 
@@ -121,17 +127,47 @@ class AgentRuntime:
         try:
             skills = await ctx.skill_registry.load_for_agent(self.agent.id, task.description, limit=5)
             if skills:
+                # capabilities become real: register executable tools + hooks
+                if ctx.services.capabilities is not None:
+                    for skill in skills:
+                        try:
+                            await ctx.services.capabilities.load_skill(skill)
+                        except Exception:  # noqa: BLE001
+                            pass
+                ctx.active_skills = skills
                 skills_ctx = "\n\n".join(
                     f"### {s.name} ({s.id})\n{s.body[:3000]}" for s in skills
                 )
         except Exception:  # noqa: BLE001
             pass
 
+        tools = await ctx.services.tools.list()
+        allowed_tools = [t for t in tools if self.agent.allows(t.permission_key or t.name)]
+        # surface tools relevant to this task, plus capability tools from skills
+        discovered = await ctx.services.tools.discover(task.description, agent=self.agent, limit=12)
+        by_name = {t.name: t for t in allowed_tools}
+        for t in discovered:
+            by_name.setdefault(t.name, t)
+        for skill in ctx.active_skills:
+            for cap in skill.tools:
+                by_name.setdefault(cap.name, None)
         tools_ctx = "\n".join(
-            f"- {t.name}: {t.description}"
-            for t in await ctx.services.tools.list()
-            if self.agent.allows(t.permission_key or t.name)
+            f"- {t.name}: {t.description}" for t in by_name.values() if t
         ) or "No tools permitted."
+
+        inbox_ctx = "No pending messages."
+        try:
+            messages = await ctx.services.messages.inbox(self.agent.id, unread_only=True, limit=8)
+            relevant = [m for m in messages if m.message_type.value in (
+                "task_request", "handoff", "status_update", "challenge", "decision", "question")]
+            if relevant:
+                lines = []
+                for m in relevant:
+                    summary = json.dumps(m.payload)[:300]
+                    lines.append(f"[{m.message_type.value}] from {m.sender}: {summary}")
+                inbox_ctx = "\n".join(lines)
+        except Exception:  # noqa: BLE001
+            pass
 
         context = {
             "agent_id": self.agent.id,
@@ -147,8 +183,10 @@ class AgentRuntime:
             "extra_constraints": (
                 f"- Model policy tier: {self.agent.model_policy.get('tier', 't2')}.\n"
                 f"- Risk level: {self.agent.risk_level}.\n"
-                f"- You may delegate to sub-agents only by requesting a new task from "
-                f"your parent; do not simulate other agents."
+                f"- You may delegate to your allowed sub-agents with the "
+                f"agent.delegate tool (depth-limited); do not simulate other agents.\n"
+                f"- Verify your work: check artifacts exist and report evidence.\n"
+                f"- Incoming structured messages from your parent:\n{inbox_ctx}"
             ),
             "output_format": (
                 "Write your final answer as a concise report with concrete "
@@ -164,12 +202,42 @@ class AgentRuntime:
     # -- model loop ---------------------------------------------------------
     async def run(self, task: Task, *, force_model: Optional[str] = None,
                   approved_tools: Optional[set[str]] = None) -> AgentRunResult:
-        """Execute one task with this agent. Returns a result (never raises
-        for ordinary failures; provider outages classify as transient)."""
+        """Execute one task with this agent through the observe → plan → act →
+        verify → recover loop. Never raises for ordinary failures; provider
+        outages classify as transient."""
         ctx = self.ctx
         if approved_tools:
             ctx.approved_tools |= approved_tools
         result = AgentRunResult()
+        tracer = getattr(ctx.services, "tracer", None)
+        span = None
+        span_cm = None
+        if tracer is not None:
+            span_cm = tracer.span(
+                kind="agent", name=f"{self.agent.id}.run", trace_id=task.task_id,
+                agent_id=self.agent.id, task_id=task.task_id,
+                project_id=task.project_id, payload={"task": task.title})
+            span = await span_cm.__aenter__()
+            ctx.current_span = span.span_id
+        started = time.perf_counter()
+        try:
+            result = await self._run_loop(task, result, force_model=force_model)
+        finally:
+            if span is not None and span_cm is not None:
+                span.latency_ms = int((time.perf_counter() - started) * 1000)
+                span.status = "ok" if not result.error else "error"
+                span.error = result.error
+                span.model = result.model
+                span.cost = result.cost
+                span.result_summary = (result.content or "")[:200]
+                await span_cm.__aexit__(None, None, None)
+                ctx.current_span = None
+            await self._post_run(task, result)
+        return result
+
+    async def _run_loop(self, task: Task, result: AgentRunResult,
+                        force_model: Optional[str]) -> AgentRunResult:
+        ctx = self.ctx
         system, user = await self._build_prompt(task)
 
         model_id, reason = await ctx.router.route(self.agent, task, project_id=task.project_id,
@@ -221,7 +289,9 @@ class AgentRuntime:
                 tool_name = call.get("tool", "")
                 args = call.get("args", {}) if isinstance(call.get("args"), dict) else {}
                 tool_result = await ctx.executor.execute(ctx, self.agent, tool_name, args)
-                if tool_result.get("ok") and tool_name in ("filesystem.write", "api.call", "shell"):
+                result.tool_results.append({**tool_result, "tool": tool_name})
+                if tool_result.get("ok") and tool_name in ("filesystem.write", "file.patch",
+                                                            "api.call", "shell"):
                     for path in self._extract_artifacts(tool_result):
                         if path not in result.artifacts:
                             result.artifacts.append(path)
@@ -243,8 +313,78 @@ class AgentRuntime:
             result.error = f"exceeded {MAX_TOOL_ROUNDS} tool rounds"
             result.fail_class = "logic"
 
+        # -- verify step: evidence over claims ------------------------------
+        if not result.error:
+            await self._verify_result(task, result)
         result.reflection = self._build_reflection(result, task)
         return result
+
+    async def _verify_result(self, task: Task, result: AgentRunResult) -> None:
+        """Deterministic verification: claimed artifacts must exist on disk,
+        failed tool calls must be accounted for. No evidence → not verified."""
+        notes: list[str] = []
+        if result.artifacts:
+            missing = []
+            for artifact in result.artifacts:
+                candidate = self.ctx.workspace / artifact
+                if not candidate.exists():
+                    missing.append(artifact)
+            if missing:
+                result.verification_note = f"artifacts missing on disk: {missing}"
+                notes.append("artifact existence FAILED")
+            else:
+                notes.append("artifacts verified on disk")
+        failed_tools = [r for r in result.tool_results if not r.get("ok")]
+        if failed_tools:
+            notes.append(f"{len(failed_tools)} tool call(s) failed")
+        if not notes:
+            notes.append("no artifacts claimed, no tool failures")
+        result.verified = not any("FAILED" in n for n in notes)
+        result.verification_note = "; ".join(notes)
+
+    async def _post_run(self, task: Task, result: AgentRunResult) -> None:
+        """Auto memory + parent notification + performance recording."""
+        ctx = self.ctx
+        try:
+            # durable memory: explicit facts + the episode itself
+            facts = await ctx.services.memory.extract_facts(task, result, self.agent.id)
+            await ctx.services.memory.record_episode(task, result, self.agent.id)
+            if facts:
+                await ctx.event_bus.publish(
+                    "memory.facts_extracted",
+                    {"agent": self.agent.id, "count": len(facts)},
+                    agent_id=self.agent.id, task_id=task.task_id,
+                    project_id=task.project_id)
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            # structured handoff to parent: TASK_RESULT or FAILURE
+            parent = self.agent.parent_agent
+            if parent:
+                if result.error and result.fail_class != "human_required":
+                    await ctx.services.messages.send(
+                        "failure", self.agent.id, parent,
+                        {"task_id": task.task_id, "error": str(result.error)[:500],
+                         "fail_class": result.fail_class, "artifacts": result.artifacts},
+                        project_id=task.project_id, task_id=task.task_id,
+                        priority="high", requires_response=True)
+                else:
+                    await ctx.services.messages.send(
+                        "task_result", self.agent.id, parent,
+                        {"task_id": task.task_id, "summary": (result.content or "")[:1000],
+                         "artifacts": result.artifacts, "cost": result.cost,
+                         "verified": result.verified,
+                         "verification_note": result.verification_note},
+                        project_id=task.project_id, task_id=task.task_id,
+                        priority="normal")
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            if ctx.services.performance is not None:
+                await ctx.services.performance.record_run(
+                    self.agent.id, outcome=result, task=task, latency_ms=0)
+        except Exception:  # noqa: BLE001
+            pass
 
     async def _call_with_failover(self, model_id: str, system: str,
                                   messages: list[dict], task: Task) -> ModelResponse:
@@ -271,7 +411,25 @@ class AgentRuntime:
                 return ModelResponse(request_id=request.request_id, model_id=current,
                                      error=f"no provider for {current}")
             request.model_id = current
+            tracer = getattr(ctx.services, "tracer", None)
+            span = None
+            span_cm = None
+            if tracer is not None:
+                span_cm = tracer.span(
+                    kind="model", name=f"model:{current}", trace_id=task.task_id,
+                    parent_span=ctx.current_span, agent_id=self.agent.id,
+                    task_id=task.task_id, project_id=task.project_id,
+                    model=current)
+                span = await span_cm.__aenter__()
             response = await provider.complete(request)
+            if span is not None and span_cm is not None:
+                span.tokens_in = response.prompt_tokens
+                span.tokens_out = response.completion_tokens
+                span.cost = response.estimated_cost
+                span.status = "error" if response.error else "ok"
+                span.error = response.error
+                span.result_summary = (response.content or "")[:200]
+                await span_cm.__aexit__(None, None, None)
             if not response.error:
                 return response
             fallback, reason = await ctx.router.failover(current, response.error)

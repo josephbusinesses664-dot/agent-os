@@ -208,9 +208,72 @@ def create_app(svc: Any) -> FastAPI:
 
     @app.get("/api/usage")
     async def usage(limit: int = 200):
-        records = await S().entity_store.list("usage", dict)
+        records = await S().entity_store.list_docs("usage")
         records.sort(key=lambda r: r.get("ts", ""), reverse=True)
         return records[:limit]
+
+    # -- tracing ------------------------------------------------------------
+    @app.get("/api/traces/{task_id}")
+    async def task_trace(task_id: str):
+        return await S().tracer.task_trace(task_id)
+
+    @app.get("/api/traces")
+    async def traces(limit: int = 200):
+        return await S().tracer.recent(limit=limit)
+
+    @app.get("/api/trace-summary")
+    async def trace_summary():
+        return await S().tracer.summary()
+
+    # -- performance / evaluation -------------------------------------------
+    @app.get("/api/performance")
+    async def performance():
+        return await S().entity_store.list_docs("performance")
+
+    @app.get("/api/performance/{agent_id}")
+    async def performance_agent(agent_id: str, window: str = "all"):
+        return (await S().performance.stats(agent_id, window)).model_dump(mode="json")
+
+    @app.get("/api/leaderboard")
+    async def leaderboard(metric: str = "success_rate", limit: int = 10):
+        return await S().performance.leaderboard(limit=limit, metric=metric)
+
+    @app.get("/api/evaluation")
+    async def evaluation(limit: int = 100):
+        records = await S().entity_store.list_docs("evaluation")
+        records.sort(key=lambda r: r.get("ts", ""), reverse=True)
+        return records[:limit]
+
+    @app.post("/api/evaluation/benchmark")
+    async def run_benchmark(dataset: str = "basic", agent: Optional[str] = None):
+        try:
+            return (await S().evaluation.run_dataset(
+                dataset, agent_override=agent)).model_dump(mode="json")
+        except KeyError as exc:
+            raise HTTPException(404, str(exc)) from exc
+
+    @app.get("/api/evaluation/datasets")
+    async def eval_datasets():
+        from agentos.evaluation.datasets import list_datasets
+        from agentos.config import Settings
+
+        root = Path(S().settings.eval_sets_dir)
+        return list_datasets(root)
+
+    # -- tool / mcp health --------------------------------------------------
+    @app.get("/api/tools/health")
+    async def tool_health(tool: Optional[str] = None):
+        return await S().tool_registry.health(tool or "")
+
+    @app.get("/api/mcp/health")
+    async def mcp_health():
+        svc = S()
+        reports = []
+        for server in await svc.mcp_registry.list():
+            reports.append(await svc.mcp_registry.health_check(server.name))
+        ok = sum(1 for r in reports if r.get("status") == "ok")
+        return {"status": "ok" if ok == len(reports) else "degraded",
+                "healthy": ok, "total": len(reports), "servers": reports}
 
     # -- events / audit -----------------------------------------------------
     @app.get("/api/events")
@@ -243,6 +306,16 @@ def create_app(svc: Any) -> FastAPI:
     @app.get("/api/memory")
     async def memory(limit: int = 100):
         return [m.model_dump(mode="json") for m in await S().memory.all(limit=limit)]
+
+    @app.get("/api/memory/stats")
+    async def memory_stats(scope: str = "project", owner_id: str = ""):
+        if not owner_id:
+            return {"error": "owner_id required"}
+        return await S().memory.stats(scope, owner_id)
+
+    @app.post("/api/memory/consolidate")
+    async def consolidate_memory(scope: str = "org", owner_id: str = "org"):
+        return await S().memory.consolidate(scope, owner_id)
 
     @app.get("/api/messages")
     async def messages(limit: int = 100):

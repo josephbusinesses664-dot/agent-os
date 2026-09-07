@@ -25,6 +25,26 @@ pytest -m integration   # integration tests (MCP always; Postgres/Redis env-gate
 | `test_integration.py` | MCP client against a real local JSON-RPC server; Postgres/Redis (env-gated) |
 | `test_e2e.py` | full 0→100 pipeline, failure recovery keeps project state |
 
+## Coverage by area
+
+- `test_memory.py` — multi-entry storage, TF-IDF semantic recall, versioned
+  facts, fact extraction, episodes, consolidation
+- `test_capabilities.py` — executable skills (inline code sandbox, skill
+  tools, validators, repo.search / db.query / file.patch)
+- `test_tools_upgrade.py` — capability discovery, permission scopes,
+  strategy-change retries, timeouts, secret redaction, tool/MCP health,
+  tool spans
+- `test_performance.py` — stats recording, leaderboard, router + delegation
+  influence
+- `test_evaluation.py` — deterministic evaluator, judge fallback, benchmark
+  run, cost-aware leaderboards, failure categorization
+- `test_collaboration.py` — handoffs/blockers, escalation on subagent
+  failure, delegation depth/duplicate limits, inbox context
+- `test_trace.py` — span chains (agent → model → tool)
+- `test_autonomy.py` — the full agency loop end-to-end (plan → research →
+  design → implement → verify → review → report) plus transient-failure
+  recovery
+
 ## Integration env vars
 
 ```bash

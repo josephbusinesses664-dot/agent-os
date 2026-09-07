@@ -16,14 +16,18 @@ from agentos.domain.models import (
     AuditEntry,
     Budget,
     DecisionRecord,
+    EvaluationRecord,
+    EvaluationRunSummary,
     Event,
     McpServer,
     MemoryEntry,
     ModelDef,
+    PerformanceStats,
     Project,
     SkillDef,
     Task,
     ToolDef,
+    TraceSpan,
     UsageRecord,
     WorkflowDef,
 )
@@ -46,11 +50,15 @@ KEY_FIELDS: dict[type, tuple[str, ...]] = {
     UsageRecord: ("usage_id",),
     Event: ("event_id",),
     AuditEntry: ("audit_id",),
-    MemoryEntry: ("scope", "owner_id"),
+    MemoryEntry: ("memory_id",),
     ApprovalRequest: ("approval_id",),
     AgentMessage: ("message_id",),
     DecisionRecord: ("decision_id",),
     AgentEvaluation: ("eval_id",),
+    EvaluationRecord: ("eval_id",),
+    EvaluationRunSummary: ("run_id",),
+    TraceSpan: ("span_id",),
+    PerformanceStats: ("agent_id", "window"),
     WorkflowDef: ("workflow_id",),
     Budget: ("scope", "scope_id"),
 }
@@ -77,6 +85,10 @@ class EntityStore:
     ) -> list[T]:
         docs = await self.repo.query(collection, predicate)
         return [model_type.model_validate(d) for d in docs]
+
+    async def list_docs(self, collection: str, predicate: Optional[dict] = None) -> list[dict]:
+        """Raw documents (for telemetry/usage endpoints that don't need models)."""
+        return await self.repo.query(collection, predicate)
 
     async def put_doc(self, collection: str, key: str, doc: dict) -> None:
         await self.repo.put(collection, key, doc)

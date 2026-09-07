@@ -38,6 +38,13 @@ EXECUTION → VERIFICATION → RESULTS / MEMORY / AUDIT LOG
 6. **Resilience** — no single provider or service is load-bearing. Model
    failover chains, graceful degradation when Mattermost/DB/Redis are down,
    and in-memory fallbacks keep the system functional offline.
+7. **Operational incentives** — performance statistics (success rate, cost,
+   latency, tool efficiency, review scores) are *used*: weaker agents get
+   routed to stronger models, proven ones earn cheaper tiers, delegation
+   prefers the best track record. No cosmetic XP.
+8. **One implementation per responsibility** — memory, evaluation and
+   observability each have a single canonical store; new ideas are integrated
+   behind those interfaces rather than added as parallel systems.
 
 ## Key flows
 
@@ -71,6 +78,56 @@ admin UI + CLI). A human approves/rejects via `@agent approve <id>`,
 `agent-os approvals approve <id>`, or the admin UI; the run resumes from its
 checkpoint. High-risk *tools* (e.g. `shell`) are gated the same way.
 
+### Agent run loop (observe → plan → act → verify → recover)
+`runtime.run()` composes the prompt (role + project context + semantic memory
+recall + relevant skills + permitted tools + **inbox messages from the
+parent**), routes a model, and runs the model/tool loop with deduplicated
+calls. After the loop it **verifies** deterministically (claimed artifacts
+must exist on disk; failed tool calls are accounted for — no evidence, no
+"verified"), records a reflection, and `_post_run`:
+
+1. extracts durable facts (marked Decision:/Lesson:/Preference:/Fact:) and
+   the task episode into memory with provenance,
+2. sends a structured `task_result`/`failure` to the parent agent,
+3. folds the outcome into the agent's performance stats.
+
+### Capabilities (executable skills)
+A skill is not only a prompt: frontmatter can attach executable tools
+(built-in handler refs or sandboxed inline python), pre/post hooks,
+validators, model settings, permissions, examples and tests. The
+`CapabilityManager` binds skill tools into the ToolRegistry so they flow
+through the *same* executor (permission checks, approvals, timeouts,
+telemetry) as built-ins. Inline code runs in a restricted namespace — no
+`open`/`eval`/`import` — so untrusted skill code cannot touch the host.
+See `skills/07-security/secret-scanning` for a worked example (executable
+scanner + redaction validator).
+
+### Memory
+One store, five layers (task/project/agent/org/user). Recall is TF-IDF
+semantic ranking blended with importance and recency — deterministic and
+offline. Facts are versioned (a restated fact supersedes the old one with a
+`supersedes` link, never a silent overwrite); completed tasks become
+retrievable episodes; consolidation archives stale low-access entries and
+merges duplicates. Every entry carries provenance
+(`agent:<id> task:<id>`).
+
+### Evaluation & performance
+Every stage/task outcome is scored by the deterministic evaluator (evidence
+checklist) and optionally an LLM judge; records persist and feed the
+`PerformanceTracker`. The model router reads performance (`influence()`)
+and delegation picks children by track record (`engine.pick_child`).
+`eval_sets/*.jsonl` are regression datasets; `agent-os evaluate basic` runs a
+benchmark through the real engine path and produces cost-aware leaderboards
+(`agent-os leaderboard`).
+
+### Tracing
+Every meaningful action records a span (kind: agent/stage/model/tool/
+evaluator) into the trace store, linked by `trace_id` (task) and
+`parent_span`. A task trace is the replayable chain
+agent → stage → model → tool → result. `/api/traces/<task_id>` and
+`agent-os traces <task_id>` expose it; `trace.span` events stream to
+subscribers.
+
 ## Storage
 
 - **Repository** — document store (`collection, key → JSON`). In-memory
@@ -79,7 +136,11 @@ checkpoint. High-risk *tools* (e.g. `shell`) are gated the same way.
 - **KV + Queue** — Redis when configured; in-memory fallback otherwise. Used
   for the task queue, counters and caching.
 - **Memory** — durable entries at agent/project/org/user/task scope with
-  keyword/tag recall; vector search is added only where it demonstrably helps.
+  TF-IDF semantic recall; vector search can be layered behind the same
+  interface only where it demonstrably helps.
+- **Traces** — span store for telemetry (tokens, cost, latency, errors).
+- **Evaluation** — evaluation records + benchmark run summaries.
+- **Performance** — per-agent rolling statistics (all/weekly/daily).
 - **Audit** — append-only log of every significant action
   (who/what/when/why/project/task/tool/model/result).
 
@@ -88,27 +149,31 @@ checkpoint. High-risk *tools* (e.g. `shell`) are gated the same way.
 ```
 agentos/
 ├── api/            REST control plane + admin UI
-├── agents/         definitions (hierarchy) + runtime
+├── agents/         definitions (hierarchy) + runtime (verify/recover loop)
 ├── budgets/        budget manager
+├── capabilities/   capability manager (executable skills, hooks, validators)
 ├── cli/            agent-os CLI
 ├── db/             repository + kv/queue abstractions (memory/postgres/redis)
 ├── domain/         canonical pydantic models
+├── evaluation/     deterministic + LLM-judge evaluators, datasets, runner
 ├── integrations/   mattermost, mcp, apis
-├── memory/         multi-scope memory store
-├── messaging/      structured agent-to-agent bus
-├── models/         providers + router
-├── observability/  event bus + health checks
+├── memory/         layered memory store (semantic recall, versioned facts)
+├── messaging/      structured agent-to-agent bus (handoffs, escalation)
+├── models/         providers + router (performance-aware)
+├── observability/  event bus + tracer + health checks
 ├── orchestration/  LangGraph state machine + engine
+├── performance.py  operational agent stats
 ├── projects/       project lifecycle
 ├── prompts/        versioned role prompts
 ├── registries/     agents, skills, tools, mcp, apis, models
-├── security/       permissions, approvals, audit
+├── security/       permissions, scopes, approvals, audit
 ├── services.py     composition root
 └── tasks/          task lifecycle + dependency graph
-skills/             20 branches of SKILL.md capabilities
-workflows/          declarative workflow YAML
+skills/             20 branches of SKILL.md capabilities (executable tools)
+eval_sets/          regression datasets (JSONL)
+workflows/          declarative workflow YAML (incl. agency-loop)
 prompts/            versioned prompts (source of truth)
 config/             documented defaults
 docker/             container build + worker entrypoint
-tests/              unit / integration / workflow / e2e / security
+tests/              unit / integration / workflow / e2e / security / autonomy
 ```

@@ -1,0 +1,89 @@
+workflow_id: agency_loop
+name: Agency Loop
+description: >
+  The full autonomous agency loop: understand → plan → research → design →
+  implement → verify → review → report, with delegation, memory updates,
+  tool discovery and evaluation. Used by the autonomous integration test and
+  as a reference pipeline.
+version: "1.0.0"
+entry_stage: plan
+stages:
+  - stage_id: plan
+    name: Executive Planning
+    agent_role: executive
+    description: >
+      Restate the goal, define success criteria, and write the execution plan
+      to artifacts/plan.md. Record the plan as a project fact.
+      PLANNED_TOOL_CALLS: [
+        {"tool":"filesystem.write","args":{"path":"artifacts/plan.md","content":"AUTO"}},
+        {"tool":"memory.save","args":{"scope":"project","kind":"decision","content":"Project plan approved: proceed through research, design, implementation, verification and review.","importance":4}}]
+
+  - stage_id: research
+    name: Research
+    agent_role: research-director
+    description: >
+      Research the goal: gather evidence, note open questions and risks.
+      Write the research brief to artifacts/research.md.
+      PLANNED_TOOL_CALLS: [
+        {"tool":"repo.search","args":{"pattern":"plan","max_results":5}},
+        {"tool":"filesystem.write","args":{"path":"artifacts/research.md","content":"AUTO"}}]
+    depends_on: [plan]
+
+  - stage_id: design
+    name: Design
+    agent_role: design-director
+    description: >
+      Design direction for the deliverable: structure, quality bar,
+      accessibility and performance considerations. Write to
+      artifacts/design.md.
+      PLANNED_TOOL_CALLS: [
+        {"tool":"filesystem.write","args":{"path":"artifacts/design.md","content":"AUTO"}}]
+    depends_on: [research]
+
+  - stage_id: implement
+    name: Implementation
+    agent_role: frontend-lead
+    description: >
+      Implement the deliverable per the plan and design. Type safety, error
+      handling, accessibility. Write the build report to
+      artifacts/implementation.md.
+      PLANNED_TOOL_CALLS: [
+        {"tool":"tool.discover","args":{"query":"write files and explore the workspace"}},
+        {"tool":"filesystem.write","args":{"path":"artifacts/implementation.md","content":"AUTO"}}]
+    depends_on: [design]
+
+  - stage_id: verify
+    name: Verification
+    agent_role: test-engineer
+    description: >
+      Verify the implementation: check the artifacts exist, run a
+      calculation check, and write the verification report to
+      artifacts/verification.md.
+      PLANNED_TOOL_CALLS: [
+        {"tool":"filesystem.read","args":{"path":"artifacts/implementation.md"}},
+        {"tool":"calculator","args":{"expression":"1 + 1"}},
+        {"tool":"filesystem.write","args":{"path":"artifacts/verification.md","content":"AUTO"}}]
+    depends_on: [implement]
+
+  - stage_id: review
+    name: Review
+    agent_role: code-reviewer
+    description: >
+      Review the implementation against the plan: correctness, quality,
+      security, tests. Write structured findings to artifacts/review.md.
+      PLANNED_TOOL_CALLS: [
+        {"tool":"filesystem.read","args":{"path":"artifacts/implementation.md"}},
+        {"tool":"filesystem.write","args":{"path":"artifacts/review.md","content":"AUTO"}}]
+    depends_on: [verify]
+
+  - stage_id: report
+    name: Final Report
+    agent_role: executive
+    description: >
+      Synthesize the full loop into a final report artifact with the
+      outcome, artifacts and next steps. Record the outcome as a project
+      memory entry.
+      PLANNED_TOOL_CALLS: [
+        {"tool":"memory.save","args":{"scope":"project","kind":"lesson","content":"Agency loop completed: planning through review produced verified artifacts.","importance":3}},
+        {"tool":"filesystem.write","args":{"path":"artifacts/final-report.md","content":"AUTO"}}]
+    depends_on: [review]

@@ -191,6 +191,16 @@ class SkillDef(BaseModel):
     enabled: bool = True
     body: str = ""  # full markdown body (loaded lazily where practical)
     source_path: str = ""
+    # --- executable capability layer -------------------------------------
+    # A skill can be more than a prompt: attach executable tools, hooks,
+    # validators, model settings, permissions, examples and tests.
+    tools: list[CapabilityTool] = Field(default_factory=list)
+    hooks: dict[str, str] = Field(default_factory=dict)  # pre_<tool>/post_<tool> -> inline python
+    validators: list[str] = Field(default_factory=list)  # inline python: async def validate(ctx, result) -> dict
+    model_settings: dict[str, Any] = Field(default_factory=dict)
+    permissions: dict[str, str] = Field(default_factory=dict)  # extra permission grants while skill active
+    examples: list[str] = Field(default_factory=list)
+    tests: list[str] = Field(default_factory=list)  # inline python: async def test(ctx) -> dict
 
 
 # ---------------------------------------------------------------------------
@@ -381,10 +391,18 @@ class MemoryEntry(BaseModel):
     memory_id: str = Field(default_factory=lambda: new_id("mem"))
     scope: MemoryScope
     owner_id: str  # agent id / project id / "org" / user id / task id
-    kind: str = "fact"  # decision | preference | lesson | fact | instruction
+    kind: str = "fact"  # decision | preference | lesson | fact | instruction | episode | evaluation
     content: str
     importance: int = 3  # 1..5
     tags: list[str] = Field(default_factory=list)
+    # provenance / lifecycle (Graphiti/Mem0-style: who said it, when, and how sure)
+    source: str = "agent"  # agent | tool | human | system | evaluation
+    provenance: str = ""  # e.g. "agent:frontend-lead task:task_abc"
+    confidence: float = 0.8  # 0..1
+    supersedes: Optional[str] = None  # memory_id of the entry this one replaces
+    archived: bool = False
+    access_count: int = 0
+    expires_at: Optional[datetime] = None
     created_at: datetime = Field(default_factory=utcnow)
     updated_at: datetime = Field(default_factory=utcnow)
 
@@ -432,6 +450,11 @@ class MessageType(str, Enum):
     REVIEW = "review"
     DISCOVERY = "discovery"
     DECISION = "decision"
+    HANDOFF = "handoff"
+    BLOCKER = "blocker"
+    CHALLENGE = "challenge"
+    ARTIFACT = "artifact"
+    APPROVAL_RESULT = "approval_result"
 
 
 class AgentMessage(BaseModel):
@@ -512,6 +535,8 @@ class StageResult(BaseModel):
 
 
 class AgentEvaluation(BaseModel):
+    """Legacy per-agent evaluation record (kept for compatibility)."""
+
     eval_id: str = Field(default_factory=lambda: new_id("ev"))
     agent_id: str
     ts: datetime = Field(default_factory=utcnow)
@@ -521,3 +546,137 @@ class AgentEvaluation(BaseModel):
     cost: float = 0.0
     tool_usage: list[str] = Field(default_factory=list)
     notes: str = ""
+
+
+# ---------------------------------------------------------------------------
+# Capabilities (executable skills)
+# ---------------------------------------------------------------------------
+
+class CapabilityTool(BaseModel):
+    """An executable tool attached to a skill/capability.
+
+    Either `handler_ref` points at a built-in handler name (preferred, safe)
+    or `code` carries inline async python source defining `handler(ctx, args)`.
+    """
+
+    name: str
+    description: str = ""
+    permission_key: str = ""
+    risk_level: str = "low"
+    handler_ref: str = ""  # e.g. "repo.search" resolved against the tool registry
+    code: str = ""  # inline python: async def handler(ctx, args) -> dict
+    timeout_seconds: int = 30
+    cost_per_call: float = 0.0
+    category: str = "capability"
+    config: dict[str, Any] = Field(default_factory=dict)
+
+
+# ---------------------------------------------------------------------------
+# Telemetry / tracing
+# ---------------------------------------------------------------------------
+
+class TraceSpan(BaseModel):
+    span_id: str = Field(default_factory=lambda: new_id("sp"))
+    trace_id: str = ""  # task id or run id the span belongs to
+    parent_span: Optional[str] = None
+    kind: str = "agent"  # agent | stage | model | tool | evaluator | memory | workflow
+    name: str = ""
+    agent_id: Optional[str] = None
+    task_id: Optional[str] = None
+    project_id: Optional[str] = None
+    model: Optional[str] = None
+    tool: Optional[str] = None
+    status: str = "ok"  # ok | error | pending
+    started_at: datetime = Field(default_factory=utcnow)
+    finished_at: Optional[datetime] = None
+    latency_ms: int = 0
+    tokens_in: int = 0
+    tokens_out: int = 0
+    cost: float = 0.0
+    error: Optional[str] = None
+    fail_class: Optional[str] = None
+    result_summary: str = ""
+    payload: dict[str, Any] = Field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, Any]:
+        d = self.model_dump(mode="json")
+        d["started_at"] = self.started_at.isoformat()
+        d["finished_at"] = self.finished_at.isoformat() if self.finished_at else None
+        return d
+
+
+# ---------------------------------------------------------------------------
+# Agent performance (operational incentives)
+# ---------------------------------------------------------------------------
+
+class PerformanceStats(BaseModel):
+    """Rolling performance statistics for an agent. These are operational:
+    routing and delegation decisions read them, nothing cosmetic."""
+
+    agent_id: str
+    window: str = "all"  # all | daily | weekly
+    day_bucket: str = ""
+    runs: int = 0
+    completed: int = 0
+    failed: int = 0
+    success_rate: float = 1.0  # 1.0 when no data (neutral prior)
+    avg_review_score: float = 0.0
+    review_count: int = 0
+    total_cost: float = 0.0
+    avg_cost: float = 0.0
+    total_tokens: int = 0
+    avg_latency_ms: float = 0.0
+    total_retries: int = 0
+    tool_calls: int = 0
+    failed_tool_calls: int = 0
+    tool_efficiency: float = 1.0  # 1 - failed/total (1.0 with no data)
+    evaluations_passed: int = 0
+    evaluations_total: int = 0
+    updated_at: datetime = Field(default_factory=utcnow)
+
+
+# ---------------------------------------------------------------------------
+# Evaluation
+# ---------------------------------------------------------------------------
+
+class EvaluationRecord(BaseModel):
+    """Canonical evaluation record: ties a task outcome to an evaluator score."""
+
+    eval_id: str = Field(default_factory=lambda: new_id("evl"))
+    ts: datetime = Field(default_factory=utcnow)
+    task_id: Optional[str] = None
+    project_id: Optional[str] = None
+    agent_id: Optional[str] = None
+    model_id: Optional[str] = None
+    skill_id: Optional[str] = None
+    workflow_id: Optional[str] = None
+    evaluator: str = "deterministic"  # deterministic | llm_judge | task_specific
+    metric: str = "quality"
+    score: float = 0.0  # 0..5
+    passed: bool = False
+    verdict: str = ""
+    reasons: list[str] = Field(default_factory=list)
+    cost: float = 0.0
+    latency_ms: int = 0
+    fail_class: Optional[str] = None
+
+    def to_dict(self) -> dict[str, Any]:
+        d = self.model_dump(mode="json")
+        d["ts"] = self.ts.isoformat()
+        return d
+
+
+class EvaluationRunSummary(BaseModel):
+    """Result of one benchmark/regression run over a dataset."""
+
+    run_id: str = Field(default_factory=lambda: new_id("evrun"))
+    dataset: str = ""
+    ts: datetime = Field(default_factory=utcnow)
+    total: int = 0
+    passed: int = 0
+    avg_score: float = 0.0
+    total_cost: float = 0.0
+    avg_latency_ms: float = 0.0
+    by_agent: dict[str, dict[str, float]] = Field(default_factory=dict)
+    by_model: dict[str, dict[str, float]] = Field(default_factory=dict)
+    by_fail_class: dict[str, int] = Field(default_factory=dict)

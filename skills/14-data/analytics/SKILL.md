@@ -12,6 +12,17 @@ risk_level: low
 cost_level: low
 tags: [analytics, metrics, data]
 compatible_agents: [sales-analyst, market-researcher]
+tools:
+  - name: data.query
+    description: "Run a read-only SQL query against a SQLite database in the workspace."
+    handler_ref: db.query
+    permission_key: db.query
+    risk_level: medium
+  - name: data.inspect-json
+    description: "Query a JSON file with a dotted path."
+    handler_ref: json.query
+    permission_key: json.query
+    risk_level: low
 ---
 
 # Analytics

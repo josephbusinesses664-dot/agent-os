@@ -62,19 +62,23 @@ I want to build a new SaaS product.            → executive creates a project
 |---|---|---|
 | Control plane API + admin UI | `agentos/api/`, `agentos/admin/` | FastAPI, single-file SPA |
 | Orchestration | `agentos/orchestration/` | LangGraph state machine, checkpoints, retries, approval gates |
-| Agent runtime | `agentos/agents/` | prompt composition, model loop, tool execution, reflection |
+| Agent runtime | `agentos/agents/` | observe → plan → act → **verify** → recover loop, inbox-fed context, auto memory, tracing |
 | Agent registry | `agentos/registries/agent_registry.py` | 41 agents in a hierarchical org chart |
-| Skill registry | `agentos/registries/skill_registry.py` + `skills/` | 100 skills, 20 branches, progressive loading |
-| Model layer | `agentos/models/` | providers (Claude/DeepSeek/GLM/OpenAI-compat/echo), router, failover |
+| Skill registry | `agentos/registries/skill_registry.py` + `skills/` | 100+ skills, 20 branches, progressive loading |
+| Capabilities | `agentos/capabilities/` | skills become executable: tools + hooks + validators + tests (sandboxed inline code) |
+| Model layer | `agentos/models/` | providers (Claude/DeepSeek/GLM/OpenAI-compat/echo), router, failover, **performance-aware routing** |
 | Budgets | `agentos/budgets/` | global/project/agent/task limits, auto-downgrade |
-| Tools + MCP | `agentos/tools/`, `agentos/registries/mcp_registry.py` | least-privilege executor, MCP streamable-HTTP client |
-| Memory | `agentos/memory/` | agent/project/org/user/task scopes |
-| Messaging | `agentos/messaging/` | structured agent-to-agent messages |
+| Tools + MCP | `agentos/tools/`, `agentos/registries/mcp_registry.py` | capability discovery, scoped permissions, strategy-change retries, timeouts, health checks, MCP lifecycle |
+| Memory | `agentos/memory/` | layered memory (task/project/agent/org/user) with TF-IDF semantic recall, episodes, versioned facts, provenance, consolidation |
+| Messaging | `agentos/messaging/` | structured agent-to-agent messages: handoffs, blockers, challenges, escalation |
+| Performance | `agentos/performance.py` | operational stats that shape routing and delegation (not cosmetic XP) |
+| Evaluation | `agentos/evaluation/` + `eval_sets/` | deterministic + LLM-judge scoring, regression datasets, benchmark runner, leaderboards |
+| Tracing | `agentos/observability/trace.py` | span chains agent → stage → model → tool → evaluator |
 | Projects & tasks | `agentos/projects/`, `agentos/tasks/` | dependency graphs, auto-unblocking |
-| Security | `agentos/security/` | permissions, approvals, audit log |
+| Security | `agentos/security/` | permissions, scopes, approvals, audit log, secret redaction |
 | Mattermost | `agentos/integrations/mattermost/` | identity layer, workspace org, commands |
 | CLI | `agentos/cli/main.py` | `agent-os …` |
-| Workflows | `workflows/*.yaml` | declarative 0→100, discovery, build-feature |
+| Workflows | `workflows/*.yaml` | declarative 0→100, discovery, build-feature, **agency-loop** |
 | Prompts | `prompts/*.md` | versioned, composable role prompts |
 
 ## Key commands
@@ -92,6 +96,10 @@ agent-os apis list
 agent-os workflows list | run
 agent-os approvals list | approve | reject
 agent-os events | audit | memory
+agent-os evaluate basic       # benchmark a regression dataset
+agent-os leaderboard          # agent performance leaderboard
+agent-os traces [task_id]     # span chain for a task
+agent-os consolidate          # memory consolidation
 agent-os ask "your goal"      # executive flow
 agent-os demo                 # offline end-to-end demo
 ```

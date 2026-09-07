@@ -114,6 +114,10 @@ async def step(engine: Any, state: dict) -> dict:
         max_retries = svc.settings.max_task_retries
         if state["retry_count"] <= max_retries:
             backoff = min(2 ** state["retry_count"], 10)
+            await svc.events.publish(
+                "stage.retry", {"stage": stage_id, "attempt": state["retry_count"],
+                                "error": getattr(result, "error", "")[:200]},
+                project_id=project.project_id, source="orchestrator", severity="warning")
             await asyncio.sleep(backoff)  # transient backoff before retry
             return {"stage_results": results, "action": "retry", "retry_count": state["retry_count"]}
         state["status"] = "failed"

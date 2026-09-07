@@ -125,6 +125,12 @@ class OrchestratorEngine:
         if not agent or not agent.enabled:
             raise ValueError(f"agent {task.assigned_agent} unavailable")
         project = await self.svc.projects.get(task.project_id)
+        # drain structured messages so the agent starts with full context
+        try:
+            for message in await self.svc.messages.inbox(agent.id, unread_only=True, limit=10):
+                await self.svc.messages.mark_delivered(message.message_id)
+        except Exception:  # noqa: BLE001
+            pass
         return await self._run_agent_for_task(agent, task, project)
 
     # ------------------------------------------------------------------
@@ -154,6 +160,15 @@ class OrchestratorEngine:
             action=f"stage {stage.stage_id}")
         result.started_at = task.created_at
 
+        tracer = getattr(self.svc, "tracer", None)
+        span = None
+        span_cm = None
+        if tracer is not None:
+            span_cm = tracer.span(
+                kind="stage", name=f"stage:{stage.stage_id}", trace_id=run_id,
+                agent_id=agent.id, task_id=task.task_id,
+                project_id=project.project_id, payload={"workflow": workflow.workflow_id})
+            span = await span_cm.__aenter__()
         run = self.svc.runtime(agent, task, project)
         outcome = await run.run(task)
         result.model = outcome.model
@@ -162,12 +177,41 @@ class OrchestratorEngine:
         result.reflection = outcome.reflection
         result.artifacts = outcome.artifacts
         result.output = outcome.content
+        if span is not None and span_cm is not None:
+            span.status = "ok" if not outcome.error else "error"
+            span.error = outcome.error
+            span.model = outcome.model
+            span.cost = outcome.cost
+            span.result_summary = (outcome.content or "")[:200]
+            await span_cm.__aexit__(None, None, None)
 
         # persist artifacts against the task + project
         for artifact in outcome.artifacts:
             await self.svc.tasks.record_artifact(task.task_id, artifact)
             await self.svc.projects.add_artifact(project.project_id, artifact)
         await self._record_usage(task, outcome)
+
+        # every stage outcome gets evaluated (deterministic) + recorded
+        try:
+            record = await self.svc.evaluation.deterministic.evaluate(task, outcome)
+            record.workflow_id = workflow.workflow_id
+            record.skill_id = stage.stage_id
+            await self.svc.entity_store.save("evaluation", record)
+            await self.svc.performance.record_evaluation(record)
+        except Exception:  # noqa: BLE001
+            pass
+
+        # structured handoff to the agent's parent (multi-agent visibility)
+        try:
+            if agent.parent_agent:
+                await self.svc.messages.send_handoff(
+                    agent.id, agent.parent_agent,
+                    artifacts=outcome.artifacts,
+                    note=f"stage {stage.stage_id} finished: "
+                         f"{'ok' if not outcome.error else 'failed'}",
+                    task_id=task.task_id, project_id=project.project_id)
+        except Exception:  # noqa: BLE001
+            pass
 
         if outcome.error and outcome.fail_class not in TRANSIENT_CLASSES:
             result.status = "failed"
@@ -201,7 +245,9 @@ class OrchestratorEngine:
     # ------------------------------------------------------------------
     async def spawn_subagent(self, parent_task: Task, child_agent_id: str,
                              description: str, depth: int = 0) -> AgentRunResult:
-        """Run a child agent for a delegated subtask, with hard limits."""
+        """Run a child agent for a delegated subtask, with hard limits and
+        strategy-change recovery: a transient failure is retried once with a
+        stronger model before escalating to the parent."""
         settings = self.svc.settings
         if depth >= settings.max_agent_depth:
             raise SpawnLimitError(
@@ -223,25 +269,75 @@ class OrchestratorEngine:
         )
         self._active_task_hashes[hash_key] = child.task_id
         self._parallel_count += 1
+        forced = None
         try:
             project = await self.svc.projects.get(parent_task.project_id)
             result = await self._run_agent_for_task(agent, child, project, depth=depth)
+            # recoverable failure → retry once with a strategy change (stronger
+            # model for this run only), then escalate to the parent.
+            if result.error and result.fail_class in TRANSIENT_CLASSES and depth <= settings.max_agent_depth:
+                await self.svc.events.publish(
+                    "agent.retry_strategy_changed",
+                    {"agent": agent.id, "task": child.task_id,
+                     "reason": f"{result.fail_class} failure — retrying with stronger model"},
+                    project_id=parent_task.project_id, task_id=child.task_id,
+                    agent_id=agent.id, severity="warning")
+                forced = await self._stronger_model(agent)
+                result = await self._run_agent_for_task(agent, child, project, depth=depth,
+                                                        force_model=forced)
+            if result.error:
+                await self.svc.messages.send(
+                    "escalation", agent.id, parent_task.assigned_agent or "executive",
+                    {"task_id": child.task_id, "error": str(result.error)[:500],
+                     "fail_class": result.fail_class,
+                     "parent_task": parent_task.task_id,
+                     "retried_with": forced},
+                    project_id=parent_task.project_id, task_id=child.task_id,
+                    priority="high", requires_response=True)
             return result
         finally:
             self._parallel_count -= 1
             self._active_task_hashes.pop(hash_key, None)
 
+    async def _stronger_model(self, agent: Any) -> Optional[str]:
+        """Pick a model one tier above the agent's policy (strategy change)."""
+        tier = agent.model_policy.get("tier", "t2")
+        stronger = {"t1": "t2", "t2": "t3"}.get(tier, "t3")
+        model_id = await self.svc.router.pick_for_provider(stronger)
+        if model_id:
+            return model_id
+        return await self.svc.router.pick_for_provider("t3") or await self.svc.router.pick_for_provider("t2")
+
+    async def pick_child(self, parent: Any, description: str) -> Optional[str]:
+        """Performance-aware delegation: among a parent's enabled children,
+        prefer the one with the best track record for this kind of work."""
+        children = [a for a in await self.svc.agent_registry.list(enabled_only=True)
+                    if a.parent_agent == parent.id]
+        if not children:
+            return None
+        ranked = []
+        for child in children:
+            stats = await self.svc.performance.stats(child.id, "all")
+            ranked.append((child, stats))
+        ranked.sort(key=lambda pair: (pair[1].success_rate, -pair[1].avg_cost,
+                                      pair[1].runs), reverse=True)
+        best, stats = ranked[0]
+        if stats.runs >= self.svc.settings.perf_min_runs_for_influence:
+            return best.id
+        return children[0].id
+
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
     async def _run_agent_for_task(self, agent: Any, task: Task, project: Optional[Project],
-                                  depth: int = 0) -> AgentRunResult:
+                                  depth: int = 0,
+                                  force_model: Optional[str] = None) -> AgentRunResult:
         await self.svc.tasks.set_status(task.task_id, TaskStatus.RUNNING)
         await self.svc.agent_registry.set_status(
             agent.id, AgentStatus.WORKING, task_id=task.task_id,
             project_id=task.project_id, action=f"depth {depth}")
-        run = self.svc.runtime(agent, task, project)
-        outcome = await run.run(task)
+        run = self.svc.runtime(agent, task, project, spawn_depth=depth)
+        outcome = await run.run(task, force_model=force_model)
         task = await self.svc.tasks.get(task.task_id)  # refresh
         if task:
             task.model_used = outcome.model

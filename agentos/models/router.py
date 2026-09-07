@@ -27,6 +27,20 @@ HIGH_COMPLEXITY = {
 }
 MEDIUM_COMPLEXITY = {"implement", "build", "feature", "test", "integration", "api"}
 
+TIER_ORDER = ["t0", "t1", "t2", "t3"]
+
+
+def _bump_tier(tier: str) -> str:
+    if tier in TIER_ORDER and tier != "t3":
+        return TIER_ORDER[TIER_ORDER.index(tier) + 1]
+    return tier
+
+
+def _drop_tier(tier: str) -> str:
+    if tier in TIER_ORDER and tier != "t0":
+        return TIER_ORDER[TIER_ORDER.index(tier) - 1]
+    return tier
+
 
 def complexity_score(text: str) -> int:
     words = set(re.findall(r"[a-z]+", text.lower()))
@@ -38,11 +52,13 @@ def complexity_score(text: str) -> int:
 
 class ModelRouter:
     def __init__(self, settings: Settings, model_registry: ModelRegistry,
-                 budgets: BudgetManager, providers: dict) -> None:
+                 budgets: BudgetManager, providers: dict,
+                 performance: Any = None) -> None:
         self.settings = settings
         self.registry = model_registry
         self.budgets = budgets
         self.providers = providers
+        self.performance = performance  # PerformanceTracker | None
 
     # -- availability -------------------------------------------------------
     async def _available(self, model_id: str) -> bool:
@@ -91,6 +107,23 @@ class ModelRouter:
             tier = "t2" if tier == "t1" else "t3"
         tier = min(tier, max_tier) if max_tier in ("t1", "t2", "t3") else tier
 
+        # performance influence: track record shifts routing (operational, not
+        # cosmetic) — weak performers go to stronger models, proven ones can
+        # drop to cheaper tiers.
+        perf_note = ""
+        if self.performance is not None:
+            try:
+                influence = await self.performance.influence(agent.id)
+                bump = influence.get("tier_bump", 0)
+                if bump > 0 and tier < max_tier:
+                    tier = _bump_tier(tier)
+                    perf_note = f" | perf bump: {influence.get('reason', '')}"
+                elif bump < 0:
+                    tier = _drop_tier(tier)
+                    perf_note = f" | perf downgrade: {influence.get('reason', '')}"
+            except Exception:  # noqa: BLE001
+                pass
+
         preferred = [m for m in policy.get("preferred_models", []) if await self._available(m)]
         if preferred:
             model_id = preferred[0]
@@ -114,7 +147,7 @@ class ModelRouter:
         if decision.action == "downgrade" and decision.suggested_model:
             return decision.suggested_model, decision.reason + " → " + decision.suggested_model
         reason = (f"tier {tier} (complexity {score}) via {agent.id} policy, "
-                  f"est ${est_cost:.4f} — {decision.reason}")
+                  f"est ${est_cost:.4f} — {decision.reason}{perf_note}")
         return model_id, reason
 
     async def failover(self, primary: str, error: str) -> tuple[Optional[str], str]:

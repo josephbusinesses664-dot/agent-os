@@ -32,6 +32,9 @@ COLLECTIONS = (
     "messages",
     "decisions",
     "evaluations",
+    "eval_runs",
+    "performance",
+    "traces",
     "workflows",
 )
 

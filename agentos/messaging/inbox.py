@@ -80,3 +80,46 @@ class MessageBus:
         messages = await self.store.list(self._collection, AgentMessage)
         messages.sort(key=lambda m: m.created_at, reverse=True)
         return messages[:limit]
+
+    # -- collaboration helpers ----------------------------------------------
+    async def send_task_request(self, sender: str, recipient: str, title: str,
+                                description: str, *, project_id: str | None = None,
+                                task_id: str | None = None,
+                                priority: str = "normal") -> AgentMessage:
+        return await self.send(MessageType.TASK_REQUEST, sender, recipient,
+                               {"title": title, "description": description,
+                                "task_id": task_id},
+                               project_id=project_id, task_id=task_id,
+                               priority=priority, requires_response=True)
+
+    async def send_handoff(self, sender: str, recipient: str, *,
+                           artifacts: list[str], note: str = "",
+                           task_id: str | None = None,
+                           project_id: str | None = None) -> AgentMessage:
+        return await self.send(MessageType.HANDOFF, sender, recipient,
+                               {"artifacts": artifacts, "note": note},
+                               project_id=project_id, task_id=task_id,
+                               priority="normal", requires_response=False)
+
+    async def send_blocker(self, sender: str, recipient: str, reason: str, *,
+                           task_id: str | None = None,
+                           project_id: str | None = None) -> AgentMessage:
+        return await self.send(MessageType.BLOCKER, sender, recipient,
+                               {"reason": reason},
+                               project_id=project_id, task_id=task_id,
+                               priority="high", requires_response=True)
+
+    async def send_challenge(self, sender: str, recipient: str, concern: str, *,
+                             task_id: str | None = None,
+                             project_id: str | None = None) -> AgentMessage:
+        return await self.send(MessageType.CHALLENGE, sender, recipient,
+                               {"concern": concern},
+                               project_id=project_id, task_id=task_id,
+                               priority="high", requires_response=True)
+
+    async def unanswered(self, recipient: str, message_type: str | None = None,
+                         limit: int = 20) -> list[AgentMessage]:
+        messages = await self.inbox(recipient, unread_only=True, limit=limit)
+        if message_type:
+            messages = [m for m in messages if m.message_type.value == message_type]
+        return messages

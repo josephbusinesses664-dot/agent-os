@@ -35,14 +35,17 @@ FRONTMATTER_RE = None  # replaced by manual split below
 def parse_skill_md(text: str, source_path: str = "") -> Optional[SkillDef]:
     if not text.startswith("---"):
         return None
-    parts = text.split("---", 2)
-    if len(parts) < 3:
+    # closing delimiter must be `---` on its own line (frontmatter may contain
+    # `---` inside code blocks, e.g. private-key markers)
+    end = text.find("\n---", 3)
+    if end == -1:
         return None
+    meta_text = text[3:end].strip()
+    body = text[end + 4:].lstrip("\n")
     try:
-        meta = yaml.safe_load(parts[1]) or {}
+        meta = yaml.safe_load(meta_text) or {}
     except yaml.YAMLError:
         return None
-    body = parts[2].strip()
     if "id" not in meta:
         return None
     meta.setdefault("name", meta["id"])
@@ -60,6 +63,14 @@ def parse_skill_md(text: str, source_path: str = "") -> Optional[SkillDef]:
     meta.setdefault("compatible_agents", [])
     meta.setdefault("tags", [])
     meta.setdefault("enabled", True)
+    # capability layer (executable tools, hooks, validators, ...)
+    meta.setdefault("tools", [])
+    meta.setdefault("hooks", {})
+    meta.setdefault("validators", [])
+    meta.setdefault("model_settings", {})
+    meta.setdefault("permissions", {})
+    meta.setdefault("examples", [])
+    meta.setdefault("tests", [])
     return SkillDef(body=body, source_path=source_path, **meta)
 
 

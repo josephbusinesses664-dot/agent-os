@@ -69,6 +69,8 @@ class McpRegistry:
         self.store = store
         self._collection = "mcp"
         self._clients: dict[str, McpClient] = {}
+        self._tool_cache: dict[str, list[dict]] = {}  # server -> discovered tools
+        self._health_cache: dict[str, str] = {}
 
     async def list(self, enabled_only: bool = True) -> list[McpServer]:
         servers = await self.store.list(self._collection, McpServer)
@@ -80,6 +82,8 @@ class McpRegistry:
 
     async def register(self, server: McpServer) -> McpServer:
         await self.store.save(self._collection, server)
+        self._clients.pop(server.name, None)
+        self._tool_cache.pop(server.name, None)
         return server
 
     async def set_enabled(self, name: str, enabled: bool) -> McpServer:
@@ -88,7 +92,66 @@ class McpRegistry:
             raise KeyError(f"MCP server {name} not found")
         server.enabled = enabled
         await self.store.save(self._collection, server)
+        if not enabled:
+            self._clients.pop(name, None)
+            self._tool_cache.pop(name, None)
         return server
+
+    # -- connection lifecycle ----------------------------------------------
+    async def connect(self, server_name: str) -> dict:
+        """Initialize a session with the server (idempotent)."""
+        server = await self.get(server_name)
+        if not server:
+            return {"ok": False, "error": f"unknown MCP server {server_name}"}
+        client = self.client_for(server)
+        try:
+            result = await client.initialize()
+            self._health_cache[server_name] = "ok"
+            return {"ok": True, "server": server_name, "capabilities": result}
+        except Exception as exc:  # noqa: BLE001
+            self._health_cache[server_name] = "error"
+            return {"ok": False, "error": str(exc)}
+
+    async def disconnect(self, server_name: str) -> None:
+        self._clients.pop(server_name, None)
+        self._tool_cache.pop(server_name, None)
+        self._health_cache.pop(server_name, None)
+
+    async def health_check(self, server_name: str) -> dict:
+        """Probe a server: cached health, else a live initialize with timeout."""
+        server = await self.get(server_name)
+        if not server:
+            return {"server": server_name, "status": "unknown", "detail": "not registered"}
+        if not server.enabled:
+            return {"server": server_name, "status": "down", "detail": "disabled"}
+        cached = self._health_cache.get(server_name)
+        if cached:
+            return {"server": server_name, "status": cached, "detail": "cached probe"}
+        result = await self.connect(server_name)
+        return {"server": server_name,
+                "status": "ok" if result.get("ok") else "error",
+                "detail": str(result.get("error", "connected"))[:200]}
+
+    # -- tool discovery -----------------------------------------------------
+    async def discover_tools(self, server_name: str, force: bool = False) -> list[dict]:
+        """List a server's tools (cached; refresh with force=True).
+
+        Enables capability-based selection: agents see what a server actually
+        exposes instead of a static config list."""
+        if not force and server_name in self._tool_cache:
+            return self._tool_cache[server_name]
+        server = await self.get(server_name)
+        if not server:
+            return []
+        client = self.client_for(server)
+        try:
+            names = await client.list_tools()
+            tools = [{"name": n, "server": server_name,
+                      "permission_key": f"mcp:{server_name}:{n}"} for n in names]
+        except Exception:  # noqa: BLE001
+            tools = []
+        self._tool_cache[server_name] = tools
+        return tools
 
     def client_for(self, server: McpServer) -> McpClient:
         if server.name not in self._clients:
@@ -108,6 +171,8 @@ class McpRegistry:
         client = self.client_for(server)
         try:
             result = await client.call_tool(tool, args)
+            self._health_cache[server_name] = "ok"
             return {"ok": True, "server": server_name, "tool": tool, "result": result}
         except Exception as exc:  # noqa: BLE001
+            self._health_cache[server_name] = "error"
             return {"ok": False, "error": str(exc)}

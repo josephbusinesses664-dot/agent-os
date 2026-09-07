@@ -64,6 +64,17 @@ class Settings(BaseSettings):
     require_approval_risk: str = "high"  # low | medium | high
     admin_user_ids: str = ""  # comma-separated Mattermost user ids with override power
 
+    # --- Memory -------------------------------------------------------------
+    memory_fact_ttl_days: int = 30  # consolidation: archive stale facts after this
+
+    # --- Evaluation ---------------------------------------------------------
+    eval_judge_tier: str = "t3"  # model tier used by the LLM-as-judge evaluator
+    eval_sets_dir: str = "./eval_sets"
+    perf_min_runs_for_influence: int = 3  # runs before stats shape routing
+
+    # --- Tools --------------------------------------------------------------
+    tool_retry_transient: int = 2  # retries for transient tool failures
+
     # --- Operations ---------------------------------------------------------
     log_level: str = "INFO"
     api_host: str = "0.0.0.0"

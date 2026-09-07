@@ -97,6 +97,9 @@ def status():
         budgets = await svc.budgets.summary()
         total_spent = sum(b.get("spent_month", 0) for b in budgets)
         mm = "ONLINE" if svc.mattermost and svc.mattermost.available else "OFFLINE"
+        top = await svc.performance.leaderboard(limit=1, min_runs=1)
+        best = top[0]["agent_id"] if top else "—"
+        trace_summary = await svc.tracer.summary()
         typer.echo("=" * 52)
         typer.echo(f"  {svc.settings.agent_os_name.upper()}")
         typer.echo("=" * 52)
@@ -110,6 +113,8 @@ def status():
         typer.echo(f"  Skills: {skills} | Tools: {tools} | Models: {models} | MCP: {mcp}")
         typer.echo(f"  Projects: {projects} | Tasks: {tasks}")
         typer.echo(f"  Budget spent (month): ${total_spent:.3f}")
+        typer.echo(f"  Spans traced:  {trace_summary['total_spans']} | errors: {trace_summary['errors']}")
+        typer.echo(f"  Best agent:    {best}")
         typer.echo("=" * 52)
 
     _run(_main())
@@ -419,6 +424,87 @@ def memory(limit: int = typer.Option(30, "--limit")):
         for m in await svc.memory.all(limit=limit):
             typer.echo(f"  [{m.scope.value:<7}] {m.owner_id:<24} {m.kind:<10} "
                        f"i={m.importance} {m.content[:80]}")
+
+    _run(_main())
+
+
+# ---------------------------------------------------------------------------
+# Evaluation / performance / traces
+# ---------------------------------------------------------------------------
+
+@app.command()
+def evaluate(dataset: str = typer.Argument("basic", help="Dataset name (eval_sets/<name>.jsonl)"),
+             agent: Optional[str] = typer.Option(None, "--agent", help="Override assigned agent"),
+             json_output: bool = typer.Option(False, "--json")):
+    """Run a benchmark over a regression dataset through the real engine path."""
+    async def _main():
+        svc = await _load_svc()
+        summary = await svc.evaluation.run_dataset(dataset, agent_override=agent)
+        if json_output:
+            typer.echo(json.dumps(summary.model_dump(), indent=2, default=str))
+            return
+        typer.echo(f"Dataset: {summary.dataset}  ({summary.total} tasks)")
+        typer.echo(f"Passed:  {summary.passed}/{summary.total}  avg score {summary.avg_score}/5")
+        typer.echo(f"Cost:    ${summary.total_cost:.4f}  avg latency {summary.avg_latency_ms}ms")
+        if summary.by_fail_class:
+            typer.echo(f"Failures: {summary.by_fail_class}")
+        if summary.by_agent:
+            typer.echo("\nBy agent:")
+            for agent_id, stats in summary.by_agent.items():
+                typer.echo(f"  {agent_id:<24} pass {stats['passed']}/{stats['runs']} "
+                           f"score {stats['score']}")
+
+    _run(_main())
+
+
+@app.command()
+def leaderboard(metric: str = typer.Option("success_rate", "--metric"),
+                limit: int = typer.Option(10, "--limit")):
+    """Show the agent performance leaderboard (success_rate | avg_cost |
+    tool_efficiency | avg_review_score)."""
+    async def _main():
+        svc = await _load_svc()
+        rows = await svc.performance.leaderboard(limit=limit, metric=metric)
+        typer.echo(f"{'AGENT':<28} {'RUNS':<6} {'SUCCESS':<9} {'AVG COST':<10} "
+                   f"{'TOOL EFF':<9} {'REVIEW':<8} {metric}")
+        typer.echo("-" * 90)
+        for r in rows:
+            typer.echo(f"{r['agent_id']:<28} {r['runs']:<6} "
+                       f"{r['success_rate'] * 100:>5.0f}%  "
+                       f"${r['avg_cost']:<9.5f} {r['tool_efficiency']:<9.2f} "
+                       f"{r['avg_review_score']:<8.2f} {r.get(metric)}")
+
+    _run(_main())
+
+
+@app.command()
+def traces(task_id: Optional[str] = typer.Argument(None, help="Task id (all recent if omitted)")):
+    """Show the span chain for a task (agent → stage → model → tool → …)."""
+    async def _main():
+        svc = await _load_svc()
+        if task_id:
+            spans = await svc.tracer.task_trace(task_id)
+            for s in spans:
+                mark = "✅" if s["status"] == "ok" else "❌"
+                typer.echo(f"  {mark} {s['kind']:<8} {s['name']:<28} "
+                           f"{s['latency_ms']}ms cost=${s['cost']:.4f} "
+                           f"{s.get('error') or ''}")
+            return
+        for s in await svc.tracer.recent(limit=20):
+            typer.echo(f"  {s['kind']:<8} {s['name']:<28} {s['status']:<6} "
+                       f"{s['latency_ms']}ms trace={s['trace_id'][:18]}")
+
+    _run(_main())
+
+
+@app.command()
+def consolidate(scope: str = typer.Option("org", "--scope"),
+                owner_id: str = typer.Option("org", "--owner")):
+    """Run memory consolidation (archive stale, merge duplicates)."""
+    async def _main():
+        svc = await _load_svc()
+        result = await svc.memory.consolidate(scope, owner_id)
+        typer.echo(f"Consolidated {scope}:{owner_id} → {result}")
 
     _run(_main())
 

@@ -13,15 +13,19 @@ from typing import Any, Optional
 
 from agentos.agents.runtime import AgentRuntime, RuntimeContext
 from agentos.budgets.manager import BudgetManager
+from agentos.capabilities import CapabilityManager
 from agentos.config import Settings
 from agentos.db.memory import MemoryKV, MemoryQueue, MemoryRepository
 from agentos.db.postgres import PostgresRepository, RedisKV, RedisQueue
 from agentos.db.store import EntityStore
+from agentos.evaluation import BenchmarkRunner
 from agentos.memory.store import MemoryStore
 from agentos.messaging.inbox import MessageBus
 from agentos.models.provider import build_providers
 from agentos.models.router import ModelRouter
 from agentos.observability.events import EventBus
+from agentos.observability.trace import Tracer
+from agentos.performance import PerformanceTracker
 from agentos.projects.service import ProjectService
 from agentos.prompts.library import PromptLibrary
 from agentos.registries.agent_registry import AgentRegistry
@@ -58,6 +62,7 @@ class Services:
     budgets: BudgetManager = None  # type: ignore[assignment]
 
     events: EventBus = None  # type: ignore[assignment]
+    tracer: Tracer = None  # type: ignore[assignment]
     audit: AuditLog = None  # type: ignore[assignment]
     approvals: ApprovalService = None  # type: ignore[assignment]
     memory: MemoryStore = None  # type: ignore[assignment]
@@ -66,6 +71,9 @@ class Services:
     tasks: TaskService = None  # type: ignore[assignment]
     prompts: PromptLibrary = None  # type: ignore[assignment]
     executor: ToolExecutor = None  # type: ignore[assignment]
+    capabilities: CapabilityManager = None  # type: ignore[assignment]
+    performance: PerformanceTracker = None  # type: ignore[assignment]
+    evaluation: BenchmarkRunner = None  # type: ignore[assignment]
 
     mattermost: Any = None
     web_search: Any = None
@@ -99,13 +107,17 @@ class Services:
         self.workflow_registry = WorkflowRegistry(self.entity_store, repo_root / "workflows")
 
         self.events = EventBus(self.entity_store)
+        self.tracer = Tracer(self.entity_store, self.events)
         self.audit = AuditLog(self.entity_store)
         self.approvals = ApprovalService(self.entity_store)
-        self.memory = MemoryStore(self.entity_store)
+        self.memory = MemoryStore(self.entity_store,
+                                  fact_ttl_days=self.settings.memory_fact_ttl_days)
         self.messages = MessageBus(self.entity_store)
         self.projects = ProjectService(self.entity_store)
         self.tasks = TaskService(self.entity_store)
         self.prompts = PromptLibrary(self.settings)
+        self.capabilities = CapabilityManager(self.tool_registry)
+        self.performance = PerformanceTracker(self.entity_store, emit=self.events.publish)
 
         self.providers = build_providers(self.settings, {})
 
@@ -118,9 +130,13 @@ class Services:
                                      emit=self.events.publish,
                                      downgrade_picker=_pick_downgrade)
         self.router = ModelRouter(self.settings, self.model_registry, self.budgets,
-                                  self.providers)
+                                  self.providers, performance=self.performance)
         self.executor = ToolExecutor(self.tool_registry, self.approvals, self.audit,
-                                     require_approval_risk=self.settings.require_approval_risk)
+                                     require_approval_risk=self.settings.require_approval_risk,
+                                     tracer=self.tracer, capabilities=self.capabilities,
+                                     retry_transient=self.settings.tool_retry_transient)
+        self.evaluation = BenchmarkRunner(self, use_judge=True,
+                                          judge_tier=self.settings.eval_judge_tier)
 
     async def seed(self) -> dict[str, int]:
         """Populate default registries (idempotent)."""
@@ -160,7 +176,8 @@ class Services:
         return self.tool_registry
 
     def runtime(self, agent: Any, task: Any, project: Any,
-                approved_tools: Optional[set[str]] = None) -> AgentRuntime:
+                approved_tools: Optional[set[str]] = None,
+                spawn_depth: int = 0) -> AgentRuntime:
         ctx = RuntimeContext(
             agent=agent, task=task, project=project,
             workspace=self.workspace / (project.project_id if project else "default"),
@@ -168,6 +185,7 @@ class Services:
             prompts=self.prompts, skill_registry=self.skill_registry,
             agent_registry=self.agent_registry, event_bus=self.events,
             budget_manager=self.budgets, approved_tools=approved_tools or set(),
+            spawn_depth=spawn_depth,
         )
         ctx.services = self  # expose the full bundle to handlers
         ctx.approved_tools = approved_tools or set()
