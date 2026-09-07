@@ -40,6 +40,150 @@ def _path_inside(workspace: Path, rel: str) -> Path:
     return candidate
 
 
+# Client sites Prem protects: NEVER touch these repos or Render services
+# without his explicit permission (Bellam & Kaaram, QueSnack).
+PROTECTED_REPO_MARKERS = ("quesnack", "bellam")
+PROTECTED_RENDER_SERVICE_IDS = ("srv-dabq05u7bikc73dtl0f0", "srv-dabq06e7bikc73dtl290")
+
+
+def _protected_repo(repo: str) -> bool:
+    return any(m in repo.lower() for m in PROTECTED_REPO_MARKERS)
+
+
+def _protected_render_target(name: str, service_id: str = "") -> bool:
+    if service_id and service_id in PROTECTED_RENDER_SERVICE_IDS:
+        return True
+    return any(m in (name or "").lower() for m in PROTECTED_REPO_MARKERS)
+
+
+async def _h_deploy_github(ctx: Any, args: dict) -> dict:
+    """Push the project workspace files to a GitHub repo via the Contents API.
+
+    Needs GITHUB_TOKEN and DEPLOY_REPO env vars (repo = owner/name). A Render
+    static site connected to that repo redeploys automatically on push."""
+    import base64
+    import os
+
+    import httpx
+
+    token = os.environ.get("GITHUB_TOKEN", "")
+    repo = str(args.get("repo") or os.environ.get("DEPLOY_REPO", "")).strip()
+    if not token:
+        return {"ok": False, "error": "deploy.github needs GITHUB_TOKEN configured"}
+    if not repo:
+        # create a repo per project: agentos-<project id>
+        pid = (ctx.project.project_id if ctx.project else "agentos").replace("_", "-")
+        repo = f"josephbusinesses664-dot/agentos-{pid}"
+        async with httpx.AsyncClient(timeout=60) as client:
+            try:
+                r = await client.post(
+                    "https://api.github.com/user/repos",
+                    headers={"Authorization": f"Bearer {token}",
+                             "Accept": "application/vnd.github+json"},
+                    json={"name": repo.split("/")[-1], "private": False,
+                          "auto_init": False})
+                if r.status_code not in (200, 201, 422):
+                    return {"ok": False, "error": f"repo creation failed: {r.status_code}"}
+            except Exception as exc:  # noqa: BLE001
+                return {"ok": False, "error": f"repo creation failed: {exc}"}
+    if _protected_repo(repo):
+        return {"ok": False, "error": "PROTECTED client repo — human permission required "
+                                      "(Bellam & Kaaram / QueSnack)"}
+    files = {}
+    for path in ctx.workspace.rglob("*"):
+        if not path.is_file() or path.stat().st_size > 5_000_000:
+            continue
+        if path.suffix.lower() in (".html", ".css", ".js", ".md", ".svg", ".png", ".jpg"):
+            rel = path.relative_to(ctx.workspace).as_posix()
+            files[rel] = base64.b64encode(path.read_bytes()).decode()
+    if not files:
+        return {"ok": False, "error": "no deployable files in the workspace"}
+    results = []
+    async with httpx.AsyncClient(timeout=60) as client:
+        for rel, b64 in files.items():
+            try:
+                r = await client.put(
+                    f"https://api.github.com/repos/{repo}/contents/{rel}",
+                    headers={"Authorization": f"Bearer {token}",
+                             "Accept": "application/vnd.github+json"},
+                    json={"message": f"agent-os deploy: {rel}",
+                          "content": b64, "branch": args.get("branch", "main")})
+                results.append({"path": rel, "status": r.status_code})
+            except Exception as exc:  # noqa: BLE001
+                results.append({"path": rel, "status": 0, "error": str(exc)[:120]})
+    ok = all(r.get("status") in (200, 201) for r in results)
+    return {"ok": ok, "repo": repo, "count": len(results), "deployed": results}
+
+
+async def _h_render_manage(ctx: Any, args: dict) -> dict:
+    """Manage Render static sites: list | create | delete.
+
+    Create: spins up a static site from a GitHub repo (autoDeploy on push).
+    Delete: removes the service. GUARD: Bellam & Kaaram and QueSnack services
+    are protected — any touch returns an error without acting."""
+    import os
+
+    import httpx
+
+    key = os.environ.get("RENDER_API_KEY", "")
+    owner = os.environ.get("RENDER_OWNER", "")
+    if not key:
+        return {"ok": False, "error": "render.manage needs RENDER_API_KEY configured"}
+    action = str(args.get("action") or "list")
+    name = str(args.get("name") or "").strip()
+    service_id = str(args.get("service_id") or "").strip()
+    if _protected_render_target(name, service_id):
+        return {"ok": False, "error": "PROTECTED client service — human permission "
+                                      "required (Bellam & Kaaram / QueSnack)"}
+    headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
+    try:
+        if action == "list":
+            async with httpx.AsyncClient(timeout=30) as client:
+                r = await client.get("https://api.render.com/v1/services",
+                                     headers=headers,
+                                     params={"ownerId": owner, "limit": "20",
+                                             **({"name": name} if name else {})})
+                data = r.json()
+                services = [{"id": s.get("service", {}).get("id", s.get("id")),
+                             "name": s.get("service", {}).get("name", s.get("name")),
+                             "type": s.get("service", {}).get("type", s.get("type"))}
+                            for s in data]
+                return {"ok": r.status_code < 300, "services": services,
+                        "count": len(services)}
+        if action == "create":
+            repo = str(args.get("repo") or "").strip()
+            if not name or not repo:
+                return {"ok": False, "error": "render.manage create needs name + repo"}
+            payload = {
+                "type": "static_site",
+                "ownerId": owner,
+                "name": name,
+                "repo": repo,
+                "branch": args.get("branch", "main"),
+                "autoDeploy": "yes",
+                "serviceDetails": {"pullRequestPreviewsEnabled": "no",
+                                   "publishDirectory": "."},
+            }
+            async with httpx.AsyncClient(timeout=60) as client:
+                r = await client.post("https://api.render.com/v1/services",
+                                      headers=headers, json=payload)
+                data = r.json()
+                return {"ok": r.status_code < 300, "status": r.status_code,
+                        "service": data if r.status_code < 300 else None,
+                        "error": data.get("message", "") if r.status_code >= 300 else ""}
+        if action == "delete":
+            if not service_id:
+                return {"ok": False, "error": "render.manage delete needs service_id"}
+            async with httpx.AsyncClient(timeout=60) as client:
+                r = await client.delete(
+                    f"https://api.render.com/v1/services/{service_id}", headers=headers)
+                return {"ok": r.status_code < 300, "status": r.status_code,
+                        "deleted": service_id}
+        return {"ok": False, "error": f"unknown action {action} (list|create|delete)"}
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "error": f"render.manage failed: {exc}"}
+
+
 async def _h_repo_tree(ctx: Any, args: dict) -> dict:
     """List the project workspace tree (dirs + files, sandbox-confined)."""
     project = ctx.project
@@ -222,6 +366,13 @@ async def _h_api_call(ctx: Any, args: dict) -> dict:
 async def _h_mcp_call(ctx: Any, args: dict) -> dict:
     if ctx.services.mcp is None:
         return {"ok": False, "error": "mcp registry not configured"}
+    # client-site guard applies to EVERY pathway, MCP included: Bellam &
+    # Kaaram and QueSnack are untouchable without Prem's explicit permission
+    import json as _json
+    blob = _json.dumps(args.get("args", {})).lower() + " " + str(args.get("tool", "")).lower()
+    if any(m in blob for m in PROTECTED_REPO_MARKERS):
+        return {"ok": False, "error": "PROTECTED client target — human permission "
+                                      "required (Bellam & Kaaram / QueSnack)"}
     return await ctx.services.mcp.call_tool(
         args["server"], args["tool"], args.get("args", {}),
         agent_id=ctx.agent.id if ctx.agent is not None else "",
@@ -731,6 +882,12 @@ BUILTIN_TOOLS: list[ToolDef] = [
     ToolDef(name="repo.tree", description="List the project workspace file tree (dirs + files).",
             permission_key="filesystem.read", risk_level="low",
             config={"parameters": {"path": {"type": "string", "description": "Directory to list, default workspace root"}}}),
+    ToolDef(name="deploy.github", description="Push the workspace files (html/css/js/md) to a GitHub repo; a Render static site on that repo auto-deploys. Needs GITHUB_TOKEN + DEPLOY_REPO configured.",
+            permission_key="deploy", risk_level="high",
+            config={"parameters": {"repo": {"type": "string", "description": "owner/name repo to push to (defaults to DEPLOY_REPO env)"}}}),
+    ToolDef(name="render.manage", description="Manage Render static sites: list, create (from a GitHub repo, autoDeploy), delete. GUARDED: Bellam & Kaaram / QueSnack services are untouchable. Needs RENDER_API_KEY + RENDER_OWNER.",
+            permission_key="deploy", risk_level="high",
+            config={"parameters": {"action": {"type": "string", "description": "list | create | delete"}, "name": {"type": "string", "description": "service name"}, "repo": {"type": "string", "description": "github repo URL for create"}, "service_id": {"type": "string", "description": "render service id for delete"}}}),
     ToolDef(name="filesystem.write", description="Write a file inside the project workspace.",
             permission_key="filesystem.write", risk_level="medium",
             config={"parameters": {"path": {"type": "string", "description": "File path inside the project workspace"}, "content": {"type": "string", "description": "Complete file content"}}}),
@@ -811,6 +968,8 @@ BUILTIN_TOOLS: list[ToolDef] = [
 HANDLERS: dict[str, ToolHandler] = {
     "filesystem.read": _h_filesystem_read,
     "repo.tree": _h_repo_tree,
+    "deploy.github": _h_deploy_github,
+    "render.manage": _h_render_manage,
     "filesystem.write": _h_filesystem_write,
     "shell": _h_shell,
     "web.search": _h_web_search,

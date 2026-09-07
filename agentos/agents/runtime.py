@@ -537,9 +537,16 @@ class AgentRuntime:
                             messages: list[dict], task: Task) -> Any:
         from agentos.domain.models import ModelRequest
 
+        import re as _re
+
+        max_tokens = 4096
+        m = _re.search(r"MAX_TOKENS\s*:\s*(\d+)", task.description or "")
+        if m:
+            max_tokens = int(m.group(1))
         return ModelRequest(model_id=model_id, system=system, messages=messages,
                             project_id=task.project_id, agent_id=self.agent.id,
-                            task_id=task.task_id, tools=await self._tool_schemas())
+                            task_id=task.task_id, max_tokens=max_tokens,
+                            tools=await self._tool_schemas())
 
     async def _tool_schemas(self) -> list[dict]:
         """OpenAI-format schemas for every tool this agent may actually call.

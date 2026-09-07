@@ -41,15 +41,20 @@ design:
   agent_role: design-director
   description: >
     Design direction: flows, hierarchy, accessibility, quality bar.
-    Write to artifacts/design.md.
+    Apply the ui-excellence skill: pick the type pairing, color token set,
+    8px spacing scale and ONE signature visual element; record the system in
+    the design doc so the build stages follow it. Write to artifacts/design.md.
     PLANNED_TOOL_CALLS: [{"tool":"filesystem.write","args":{"path":"artifacts/design.md","content":"AUTO"}}]
 
 implement-frontend:
   name: Frontend Implementation
   agent_role: frontend-lead
   description: >
-    Build the actual frontend. Do NOT use any tools and do not read files —
-    you already have the mission, requirements and design direction. Your
+    Build the actual frontend. Tools like filesystem.write ARE available to
+    you (plus context7 for framework docs) — use them when they help. The
+    simplest reliable path is: do not read files (you already have the
+    mission, requirements and design direction), and put the deliverable
+    directly in your FINAL ANSWER. Your
     FINAL ANSWER must be the COMPLETE landing page as raw HTML source: a
     single self-contained page with inline CSS and any JavaScript it needs,
     selling the product from the mission — polished hero, features,
@@ -60,8 +65,11 @@ implement-backend:
   name: Backend Implementation
   agent_role: backend-lead
   description: >
-    Build the working demo. Do NOT use any tools and do not read files — you
-    already have the mission, requirements and design direction. Your FINAL
+    Build the working demo. Tools like filesystem.write ARE available to
+    you (plus context7 for framework docs) — use them when they help. The
+    simplest reliable path is: do not read files (you already have the
+    mission, requirements and design direction), and put the deliverable
+    directly in your FINAL ANSWER. Your FINAL
     ANSWER must be the COMPLETE interactive demo as raw HTML source: a single
     self-contained page with inline CSS and real JavaScript that simulates
     the product from the mission — a shared team room where several humans
@@ -98,7 +106,12 @@ deploy:
   name: Deployment
   agent_role: deployment-agent
   description: >
-    Deploy (staging). Production requires approval. Write the deployment
+    Deploy the built site: call deploy.github to push the workspace files to
+    the deployment repo (it creates one per project if none is set), then
+    render.manage create to spin up a Render static site from that repo
+    (autoDeploy on push). GITHUB_TOKEN + RENDER_API_KEY + RENDER_OWNER must be
+    configured. NEVER touch Bellam & Kaaram or QueSnack — they are protected.
+    If keys are missing, note it in the report instead. Write the deployment
     report to artifacts/deploy.md.
     PLANNED_TOOL_CALLS: [{"tool":"filesystem.write","args":{"path":"artifacts/deploy.md","content":"AUTO"}}]
   requires_approval: false

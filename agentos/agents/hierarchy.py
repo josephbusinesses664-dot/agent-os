@@ -34,6 +34,7 @@ def _agent(
     tier: str,
     risk: str = "low",
     extra_permissions: dict[str, str] | None = None,
+    mcp_servers: list[str] | None = None,
 ) -> AgentDef:
     perms: dict[str, str] = {
         "filesystem.read": "allow",
@@ -65,7 +66,10 @@ def _agent(
     perms.update(extra_permissions or {})
     # execs (executive office + department directors) think with deepseek-pro;
     # every specialist below them works on deepseek-flash
-    preferred = ("deepseek-pro" if agent_id in _EXEC_IDS else "deepseek-flash")
+    # build stages emit whole pages (10-35KB) — flash caps at ~1-2K words
+    _BUILD_IDS = {"frontend-lead", "backend-lead"}
+    preferred = ("deepseek-pro" if agent_id in _EXEC_IDS or agent_id in _BUILD_IDS
+                 else "deepseek-flash")
     return AgentDef(
         id=agent_id,
         name=name,
@@ -78,6 +82,7 @@ def _agent(
         model_policy={"tier": tier, "preferred_models": [preferred], "max_tier": "t3"},
         permissions=perms,
         risk_level=risk,
+        mcp_servers=mcp_servers or [],
         identity=identity_for(agent_id),
     )
 
@@ -153,26 +158,30 @@ def build_org() -> list[AgentDef]:
             "executive", ["software-architect", "frontend-lead", "backend-lead",
                           "database-engineer", "devops-engineer", "ai-engineer"],
             ["architecture", "tech-decision"],
-            ["mattermost.post", "memory.recall", "project.state", "filesystem.read"],
+            ["mattermost.post", "memory.recall", "project.state", "filesystem.read", "mcp.call"],
             "t3", "medium",
+            mcp_servers=["context7", "github"],
         ),
         _agent(
             "software-architect", "Software Architect", "Architecture",
             "Designs system architecture, data models and integration contracts.",
             "cto", [],
             ["architecture", "api-design", "database-design"],
-            ["filesystem.read", "memory.recall", "project.state"],
+            ["filesystem.read", "memory.recall", "project.state", "mcp.call"],
             "t2",
+            mcp_servers=["context7", "github"],
+            extra_permissions={"mcp.call": "allow"},
         ),
         _agent(
             "frontend-lead", "Frontend Lead", "Frontend engineering",
             "Builds polished production-quality frontends: React/Next/TS, design "
             "quality treated as an engineering requirement.",
             "cto", [],
-            ["frontend-engineering", "react-nextjs", "design-quality", "ui-qa"],
-            ["filesystem.read", "filesystem.write", "shell", "memory.recall"],
+            ["frontend-engineering", "react-nextjs", "design-quality", "ui-qa", "ui-excellence"],
+            ["filesystem.read", "filesystem.write", "shell", "memory.recall", "mcp.call"],
             "t2",
-            extra_permissions={"filesystem.write": "allow", "shell": "allow",
+            mcp_servers=["context7", "github"],
+            extra_permissions={"filesystem.write": "allow", "shell": "allow", "mcp.call": "allow",
                               "browser.open": "allow", "browser.snapshot": "allow",
                               "browser.click": "allow", "browser.type": "allow",
                               "browser.screenshot": "allow", "browser.close": "allow"},
@@ -182,9 +191,10 @@ def build_org() -> list[AgentDef]:
             "Builds APIs, services, data layers and integrations.",
             "cto", [],
             ["backend-engineering", "api-design", "database-design"],
-            ["filesystem.read", "filesystem.write", "shell", "memory.recall"],
+            ["filesystem.read", "filesystem.write", "shell", "memory.recall", "mcp.call"],
             "t2",
-            extra_permissions={"filesystem.write": "allow", "shell": "allow"},
+            mcp_servers=["context7", "github"],
+            extra_permissions={"filesystem.write": "allow", "shell": "allow", "mcp.call": "allow"},
         ),
         _agent(
             "database-engineer", "Database Engineer", "Data layer",
@@ -192,9 +202,10 @@ def build_org() -> list[AgentDef]:
             "adapter is approval-gated.",
             "cto", [],
             ["database-design", "data-modeling"],
-            ["filesystem.read", "memory.recall"],
+            ["filesystem.read", "memory.recall", "mcp.call"],
             "t1",
-            extra_permissions={"postgres.query": "allow"},
+            mcp_servers=["context7"],
+            extra_permissions={"postgres.query": "allow", "mcp.call": "allow"},
         ),
         _agent(
             "devops-engineer", "DevOps Engineer", "Deployment & infra",
@@ -211,9 +222,10 @@ def build_org() -> list[AgentDef]:
             "Builds agent tooling, prompt systems, evaluations and model plumbing.",
             "cto", [],
             ["ai-engineering", "prompt-engineering", "evaluation"],
-            ["filesystem.read", "filesystem.write", "memory.recall"],
+            ["filesystem.read", "filesystem.write", "memory.recall", "mcp.call"],
             "t2",
-            extra_permissions={"filesystem.write": "allow"},
+            mcp_servers=["context7", "github"],
+            extra_permissions={"filesystem.write": "allow", "mcp.call": "allow"},
         ),
         # --- Design --------------------------------------------------------
         _agent(
@@ -221,26 +233,30 @@ def build_org() -> list[AgentDef]:
             "Owns design quality across products; judges whether advanced motion "
             "genuinely improves UX before approving it.",
             "executive", ["ux-designer", "ui-designer", "motion-engineer"],
-            ["design-review", "design-quality", "accessibility"],
-            ["mattermost.post", "memory.recall", "project.state", "filesystem.read"],
+            ["design-review", "design-quality", "accessibility", "ui-excellence"],
+            ["mattermost.post", "memory.recall", "project.state", "filesystem.read", "mcp.call"],
             "t3", "medium",
+            mcp_servers=["context7"],
         ),
         _agent(
             "ux-designer", "UX Designer", "UX",
             "Information architecture, flows, hierarchy, usability, accessibility.",
             "design-director", [],
-            ["ux-design", "information-architecture", "accessibility"],
-            ["filesystem.read", "memory.recall"],
+            ["ux-design", "information-architecture", "accessibility", "ui-excellence"],
+            ["filesystem.read", "memory.recall", "mcp.call"],
             "t2",
+            mcp_servers=["context7"],
+            extra_permissions={"mcp.call": "allow"},
         ),
         _agent(
             "ui-designer", "UI Designer", "UI / visual",
             "Visual design: typography, color systems, spacing, grids, components.",
             "design-director", [],
-            ["ui-design", "design-systems", "visual-hierarchy"],
-            ["filesystem.read", "memory.recall"],
+            ["ui-design", "design-systems", "visual-hierarchy", "ui-excellence"],
+            ["filesystem.read", "memory.recall", "mcp.call"],
             "t2",
-            extra_permissions={"browser.open": "allow", "browser.snapshot": "allow",
+            mcp_servers=["context7"],
+            extra_permissions={"browser.open": "allow", "browser.snapshot": "allow", "mcp.call": "allow",
                               "browser.close": "allow"},
         ),
         _agent(
@@ -461,7 +477,7 @@ def build_org() -> list[AgentDef]:
             "Executes deployment workflows. Production deploys require approval.",
             "operations-director", [],
             ["deployment", "release-management"],
-            ["shell", "deploy", "github", "filesystem.read", "memory.recall"],
+            ["shell", "deploy", "github", "deploy.github", "render.manage", "filesystem.read", "memory.recall"],
             "t2", "high",
             extra_permissions={"shell": "allow", "deploy": "allow", "github": "allow"},
         ),

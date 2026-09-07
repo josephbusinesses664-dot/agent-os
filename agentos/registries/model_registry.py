@@ -23,7 +23,7 @@ def default_models() -> list[ModelDef]:
                  capabilities=["reasoning", "coding", "analysis", "tool-use"],
                  fallbacks=["deepseek-pro", "glm-pro"]),
         # --- Tier 2: senior workers ----------------------------------------
-        ModelDef(id="deepseek-pro", provider="deepseek", name="deepseek-chat",
+        ModelDef(id="deepseek-pro", provider="deepseek", name="deepseek-v4-pro",
                  tier="t2", context_window=128000,
                  price_in_per_million=0.27, price_out_per_million=1.10,
                  capabilities=["coding", "analysis", "research"],
@@ -34,7 +34,7 @@ def default_models() -> list[ModelDef]:
                  capabilities=["coding", "analysis"],
                  fallbacks=["deepseek-pro"]),
         # --- Tier 1: cheap workers -----------------------------------------
-        ModelDef(id="deepseek-flash", provider="deepseek", name="deepseek-chat",
+        ModelDef(id="deepseek-flash", provider="deepseek", name="deepseek-v4-flash",
                  tier="t1", context_window=128000,
                  price_in_per_million=0.07, price_out_per_million=0.28,
                  capabilities=["classification", "extraction", "summarization"],
