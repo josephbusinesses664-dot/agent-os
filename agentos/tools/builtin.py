@@ -425,6 +425,8 @@ async def _h_repo_search(ctx: Any, args: dict) -> dict:
                                       "(the substring to search for)"}
     max_results = min(int(args.get("max_results", 20)), 100)
     matches: list[dict] = []
+    if not ctx.workspace.exists():
+        return {"ok": True, "pattern": pattern, "matches": [], "count": 0}
     for path in ctx.workspace.rglob("*"):
         if path.is_dir() or not _is_text_file(path):
             continue

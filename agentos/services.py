@@ -189,9 +189,11 @@ class Services:
     def runtime(self, agent: Any, task: Any, project: Any,
                 approved_tools: Optional[set[str]] = None,
                 spawn_depth: int = 0) -> AgentRuntime:
+        workspace = self.workspace / (project.project_id if project else "default")
+        workspace.mkdir(parents=True, exist_ok=True)
         ctx = RuntimeContext(
             agent=agent, task=task, project=project,
-            workspace=self.workspace / (project.project_id if project else "default"),
+            workspace=workspace,
             services=self, executor=self.executor, router=self.router,
             prompts=self.prompts, skill_registry=self.skill_registry,
             agent_registry=self.agent_registry, event_bus=self.events,
