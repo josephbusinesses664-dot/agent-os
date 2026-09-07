@@ -99,12 +99,22 @@ async def _h_calculator(ctx: Any, args: dict) -> dict:
 
 
 async def _h_memory_recall(ctx: Any, args: dict) -> dict:
-    entries = await ctx.services.memory.recall(
-        scope=args.get("scope", "project"),
-        owner_id=args.get("owner_id") or (ctx.project.project_id if ctx.project else "org"),
-        query=args.get("query"),
-        limit=args.get("limit", 10),
-    )
+    """Permission-scoped recall: agents may only read memories they are
+    authorized for (agent/task/project/org rules); denials return empty
+    results and are audit-logged. Existence is never disclosed."""
+    scope = args.get("scope", "project")
+    owner_id = args.get("owner_id") or (ctx.project.project_id if ctx.project else "org")
+    scoped = getattr(ctx.services, "scoped_memory", None)
+    if scoped is not None and ctx.agent is not None:
+        entries = await scoped.scoped_recall(
+            ctx.agent, scope, owner_id,
+            query=args.get("query"), limit=args.get("limit", 10),
+            task=ctx.task,
+            project_id=ctx.project.project_id if ctx.project else "")
+    else:  # no scoping context (system callers keep legacy behavior)
+        entries = await ctx.services.memory.recall(scope, owner_id,
+                                                   query=args.get("query"),
+                                                   limit=args.get("limit", 10))
     return {"ok": True, "entries": [e.model_dump() for e in entries]}
 
 
@@ -114,15 +124,29 @@ async def _h_memory_save(ctx: Any, args: dict) -> dict:
         provenance += f"agent:{ctx.agent.id}"
     if ctx.task is not None:
         provenance += f" task:{ctx.task.task_id}"
-    entry = await ctx.services.memory.save(
-        scope=args.get("scope", "project"),
-        owner_id=args.get("owner_id") or (ctx.project.project_id if ctx.project else "org"),
-        kind=args.get("kind", "fact"),
-        content=args["content"],
-        importance=args.get("importance", 3),
-        source=args.get("source", "agent"),
-        provenance=provenance.strip(),
-    )
+    scope = args.get("scope", "project")
+    owner_id = args.get("owner_id") or (ctx.project.project_id if ctx.project else "org")
+    scoped = getattr(ctx.services, "scoped_memory", None)
+    entry = None
+    if scoped is not None and ctx.agent is not None:
+        entry = await scoped.scoped_save(
+            ctx.agent, scope, owner_id, args["content"],
+            task=ctx.task,
+            project_id=ctx.project.project_id if ctx.project else "",
+            kind=args.get("kind", "fact"),
+            importance=args.get("importance", 3),
+            source=args.get("source", "agent"),
+            provenance=provenance.strip())
+        if entry is None:
+            return {"ok": False,
+                    "error": f"not authorized to save {scope} memories for {owner_id}"}
+    else:
+        entry = await ctx.services.memory.save(
+            scope, owner_id, args["content"],
+            kind=args.get("kind", "fact"),
+            importance=args.get("importance", 3),
+            source=args.get("source", "agent"),
+            provenance=provenance.strip())
     return {"ok": True, "memory_id": entry.memory_id}
 
 

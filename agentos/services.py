@@ -32,6 +32,7 @@ from agentos.prompts.library import PromptLibrary
 from agentos.registries.agent_registry import AgentRegistry
 from agentos.registries.api_registry import ApiRegistry
 from agentos.registries.mcp_registry import McpRegistry
+from agentos.security.rollback import RollbackLedger, compensate_filesystem_write
 from agentos.registries.model_registry import ModelRegistry
 from agentos.registries.skill_registry import SkillRegistry
 from agentos.registries.tool_registry import ToolRegistry
@@ -115,6 +116,8 @@ class Services:
         self.approvals = ApprovalService(self.entity_store)
         self.memory = MemoryStore(self.entity_store,
                                   fact_ttl_days=self.settings.memory_fact_ttl_days)
+        from agentos.memory.scoping import ScopedMemoryStore
+        self.scoped_memory = ScopedMemoryStore(self.memory, audit=self.audit)
         self.messages = MessageBus(self.entity_store)
         self.projects = ProjectService(self.entity_store)
         self.tasks = TaskService(self.entity_store)
@@ -134,8 +137,12 @@ class Services:
                                      downgrade_picker=_pick_downgrade)
         self.router = ModelRouter(self.settings, self.model_registry, self.budgets,
                                   self.providers, performance=self.performance)
+        self.rollback = RollbackLedger(audit=self.audit, event_bus=self.events)
+        self.rollback.register_compensation("compensate_filesystem_write",
+                                            compensate_filesystem_write)
         self.executor = ToolExecutor(self.tool_registry, self.approvals, self.audit,
                                      require_approval_risk=self.settings.require_approval_risk,
+                                     rollback=self.rollback,
                                      tracer=self.tracer, capabilities=self.capabilities,
                                      retry_transient=self.settings.tool_retry_transient)
         self.evaluation = BenchmarkRunner(self, use_judge=True,

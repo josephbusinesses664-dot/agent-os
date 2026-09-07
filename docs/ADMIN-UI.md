@@ -20,7 +20,11 @@ communication surface; the UI is for inspection and governance.
 - **Budget** — spend bars per scope + usage records.
 - **Approvals** — approve/reject right from the UI.
 - **Events / Audit** — live event feed and the audit log.
-
+- **Control Plane** — the human's view of what the organization is doing:
+  goal→plan→execution pipeline per project, active rollback entries with
+  reversibility classification, and one-click human rollback of mutative
+  actions (`POST /api/rollback/{id}/rollback`). Backed by
+  `/api/control/pipeline` and `/api/rollback`.
 Auto-refreshes every 6 seconds. Single-file, dependency-free, dark theme,
 responsive (collapses to an icon rail on mobile) — no gratuitous animation.
 
@@ -30,5 +34,6 @@ All views are plain JSON endpoints under `/api/*` (`/api/status`,
 `/api/agents`, `/api/tasks`, `/api/projects`, `/api/skills`, `/api/models`,
 `/api/mcp`, `/api/apis`, `/api/budget`, `/api/usage`, `/api/events`,
 `/api/audit`, `/api/approvals`, `/api/memory`, `/api/messages`,
-`/api/health`) plus mutation endpoints: `POST /api/goals`,
-`POST /api/approvals/{id}/decide`, `POST /api/tasks/{id}/run`, etc.
+`/api/health`, `/api/control/pipeline`, `/api/rollback`) plus mutation
+endpoints: `POST /api/goals`, `POST /api/approvals/{id}/decide`,
+`POST /api/tasks/{id}/run`, `POST /api/rollback/{id}/rollback`, etc.

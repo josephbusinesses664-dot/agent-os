@@ -60,6 +60,43 @@ prompts. The org-chart agents carry explicit grants.
    resumes from its checkpoint). Rejected → the stage/workflow fails with a
    recorded decision.
 
+## Memory permission-scoping
+
+Memory access is enforced in code (`agentos/memory/scoping.py`), not by prompt
+etiquette. `ScopedMemoryStore` wraps the memory store for the runtime tools:
+
+| Scope | Read | Write |
+|---|---|---|
+| `agent` | the agent itself + its parent (supervision) | the agent itself |
+| `task` | task participants: assignee, assignee's parent, agents whose parent is the assignee | assignee + its parent |
+| `project` | agents operating in that project (system-supplied context) | same |
+| `org` | everyone | autonomy L4+ (directors/executives) |
+| `user` | never (agents have no path to user-private memories) | never |
+
+Possession of a task object is not participation: an unassigned task has no
+participants, and an executive holding a task reference gains nothing.
+Denied recalls return an **empty result** (existence is never disclosed) and
+are audit-logged as `memory.recall_denied` / `memory.save_denied`.
+
+## Rollback / compensation ledger
+
+Every successful mutative tool call (`shell`, `api.call`, `mcp.call`,
+`mattermost.post`, `deploy`, `github`, `docker`, `filesystem.write`,
+`file.patch`) is recorded (`agentos/security/rollback.py`) with an honest
+reversibility classification:
+
+- `reversible` — a compensation is registered and executable (workspace
+  writes: the compensation deletes the written file, confined to the
+  recorded workspace base)
+- `compensating` — no true undo, but harm-reducing action recorded
+- `irreversible` — no compensation known; recorded so the system can warn
+  and gate before acting, not apologize after
+
+Rollback is idempotent, ordered per task (newest first, stops at first
+failure), and never stores secrets (args are redacted). The admin Control
+Plane view and `POST /api/rollback/{id}/rollback` let a human execute or
+inspect compensations.
+
 ## Known limitations
 
 - The admin UI has no built-in auth — protect it with a reverse proxy /

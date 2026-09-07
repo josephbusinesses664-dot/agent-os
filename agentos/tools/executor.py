@@ -59,15 +59,24 @@ def redact_args(args: dict) -> dict:
     return out
 
 
+# tools that mutate state (rollback ledger records successful calls)
+_MUTATIVE_TOOLS = {"shell", "api.call", "mcp.call", "mattermost.post", "deploy",
+                   "github", "docker", "filesystem.write", "file.patch"}
+# workspace-confined writes have native undo (compensation deletes the file)
+_SANDBOXED_TOOLS = {"filesystem.write", "file.patch"}
+
+
 class ToolExecutor:
     def __init__(self, tools: ToolRegistry, approvals: ApprovalService,
                  audit: AuditLog, *, require_approval_risk: str = "high",
+                 rollback: Any = None,
                  tracer: Any = None, capabilities: Any = None,
                  retry_transient: int = 2) -> None:
         self.tools = tools
         self.approvals = approvals
         self.audit = audit
         self.require_approval_risk = require_approval_risk
+        self.rollback = rollback
         self.tracer = tracer
         self.capabilities = capabilities
         self.retry_transient = retry_transient
@@ -162,6 +171,27 @@ class ToolExecutor:
         cost_per_call = float(tool.config.get("cost_per_call", 0) or 0)
         if cost_per_call > 0:
             result["cost"] = cost_per_call
+
+        # rollback/compensation ledger (Phase 14): record every successful
+        # mutative action; snapshot files before workspace writes so the
+        # compensation can restore them. Recording is best-effort — a ledger
+        # failure never breaks execution.
+        if result.get("ok") and tool_name in _MUTATIVE_TOOLS:
+            try:
+                entry = self.rollback.record(
+                    tool=tool_name, args=args, agent_id=agent.id,
+                    task_id=ctx.task.task_id if ctx.task else None,
+                    project_id=ctx.project.project_id if ctx.project else None,
+                    reversibility="reversible" if tool_name in _SANDBOXED_TOOLS else "compensating",
+                    compensation_name=("compensate_filesystem_write"
+                                       if tool_name in _SANDBOXED_TOOLS else ""),
+                    compensation_args=({"workspace": str(ctx.workspace)}
+                                       if tool_name in _SANDBOXED_TOOLS else None),
+                    note="recorded by executor")
+                result["rollback_entry"] = entry.entry_id
+                result["reversibility"] = entry.reversibility
+            except Exception:  # noqa: BLE001
+                pass
 
         await self._audit(ctx, agent, tool_name, "tool.called",
                           "ok" if result.get("ok") else "error",

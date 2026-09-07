@@ -360,6 +360,68 @@ def create_app(svc: Any) -> FastAPI:
     async def messages(limit: int = 100):
         return [m.model_dump(mode="json") for m in await S().messages.recent(limit=limit)]
 
+    # -- control plane: org pipeline + rollback ledger ------------------------
+    @app.get("/api/control/pipeline")
+    async def control_pipeline():
+        """The human control plane: projects (goals) with plans, tasks,
+        escalations and outcomes — the org at a glance."""
+        svc = S()
+        projects = await svc.projects.list()
+        out = []
+        for p in projects:
+            tasks = await svc.tasks.by_project(p.project_id)
+            task_rows = [{"task_id": t.task_id, "title": t.title,
+                          "status": t.status.value,
+                          "agent": t.assigned_agent,
+                          "cost": t.cost, "error": t.error}
+                         for t in tasks]
+            out.append({
+                "project_id": p.project_id, "name": p.name,
+                "objective": p.objective, "stage": p.stage,
+                "status": p.status.value, "cost": p.cost,
+                "tasks": task_rows,
+                "open_tasks": sum(1 for t in tasks if t.status.value in
+                                  ("pending", "queued", "running", "blocked")),
+                "failed_tasks": sum(1 for t in tasks if t.status.value == "failed"),
+            })
+        return out
+
+    @app.get("/api/rollback")
+    async def rollback_ledger():
+        svc = S()
+        ledger = getattr(svc, "rollback", None)
+        if ledger is None:
+            return {"stats": {}, "active": []}
+        return {"stats": ledger.stats(),
+                "active": [{"entry_id": e.entry_id, "tool": e.tool,
+                            "agent": e.agent_id, "task_id": e.task_id,
+                            "reversibility": e.reversibility,
+                            "status": e.status, "note": e.note,
+                            "args": e.args_redacted}
+                           for e in ledger.active()]}
+
+    @app.post("/api/rollback/{entry_id}/rollback")
+    async def rollback_entry(entry_id: str):
+        svc = S()
+        ledger = getattr(svc, "rollback", None)
+        if ledger is None:
+            raise HTTPException(503, "rollback ledger unavailable")
+        result = await ledger.rollback(entry_id, operator="human")
+        if not result.get("ok"):
+            raise HTTPException(409, result.get("error", "rollback failed"))
+        return result
+
+    @app.post("/api/rollback/task/{task_id}/rollback")
+    async def rollback_task_actions(task_id: str):
+        svc = S()
+        ledger = getattr(svc, "rollback", None)
+        if ledger is None:
+            raise HTTPException(503, "rollback ledger unavailable")
+        result = await ledger.rollback_task(task_id, operator="human")
+        if not result.get("ok"):
+            raise HTTPException(409, result.get("error", "rollback failed"))
+        return result
+
     # -- admin UI -----------------------------------------------------------
     static_dir = Path(__file__).resolve().parent.parent / "admin" / "static"
     app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
