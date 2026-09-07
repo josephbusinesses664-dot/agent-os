@@ -403,6 +403,29 @@ class AgentRuntime:
                 result.error = f"exceeded {MAX_TOOL_ROUNDS} tool rounds"
                 result.fail_class = "logic"
 
+        # -- minimum-work guard: never let an opening line pass as the work --
+        if not result.error and len((result.content or "").strip()) < 400:
+            # one explicit chance to finish the actual work
+            messages.append({
+                "role": "user",
+                "content": ("[Your answer so far is just an opening — the actual work "
+                            "is missing. Do the full task now and give the complete "
+                            "final deliverable in your answer: analysis, findings, "
+                            "conclusions — everything, in full detail.]"),
+            })
+            try:
+                response = await self._call_with_failover(model_id, system, messages, task)
+                final_text = clean_content(response.content or "")
+                if len(final_text) >= 400:
+                    result.content = final_text
+                else:
+                    result.content = result.content or final_text
+                    result.error = "stage produced no substantive output"
+                    result.fail_class = "logic"
+            except Exception as exc:  # noqa: BLE001
+                result.error = str(exc)
+                result.fail_class = classify_error(str(exc))
+
         # -- verify step: evidence over claims ------------------------------
         if not result.error:
             await self._verify_result(task, result)

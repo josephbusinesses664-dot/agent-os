@@ -256,13 +256,37 @@ async def _h_shell(ctx: Any, args: dict) -> dict:
 
 
 async def _h_web_search(ctx: Any, args: dict) -> dict:
+    """DuckDuckGo HTML search (keyless) — real web results."""
+    import re
+    import urllib.parse
+
+    import httpx
+
     query = str(args.get("query") or args.get("q") or args.get("search") or "")
     if not query:
         return {"ok": False, "error": "web.search requires a 'query' argument"}
-    if ctx.services.web_search is None:
-        return {"ok": False, "error": "web_search not configured (no search API key)"}
+    limit = min(int(args.get("limit", 6)), 15)
+    url = "https://html.duckduckgo.com/html/?q=" + urllib.parse.quote(query)
     try:
-        return {"ok": True, "results": await ctx.services.web_search(query, limit=args.get("limit", 5))}
+        async with httpx.AsyncClient(timeout=25, follow_redirects=True,
+                                     headers={"User-Agent": "Mozilla/5.0 (X11; Linux x86_64; rv:125.0) Gecko/20100101 Firefox/125.0"}) as client:
+            resp = await client.get(url)
+            resp.raise_for_status()
+        html = resp.text
+        results = []
+        for m in re.finditer(
+                r'<a[^>]+class="result__a"[^>]+href="([^"]+)"[^>]*>(.*?)</a>'
+                r'.*?<a[^>]+class="result__snippet"[^>]*>(.*?)</a>', html, re.S):
+            results.append({
+                "title": re.sub(r"<[^>]+>", "", m.group(2)).strip(),
+                "url": m.group(1),
+                "snippet": re.sub(r"<[^>]+>", "", m.group(3)).strip()[:400],
+            })
+            if len(results) >= limit:
+                break
+        if not results:
+            return {"ok": False, "error": "no results (DDG may be rate-limiting; retry shortly)"}
+        return {"ok": True, "query": query, "results": results, "count": len(results)}
     except Exception as exc:  # noqa: BLE001
         return {"ok": False, "error": f"web_search failed: {exc}"}
 
@@ -552,6 +576,79 @@ async def _h_json_query(ctx: Any, args: dict) -> dict:
         else:
             return {"ok": False, "error": f"path segment {part} not found"}
     return {"ok": True, "result": node}
+
+
+async def _h_hn_search(ctx: Any, args: dict) -> dict:
+    """Hacker News search via the Algolia HN API (keyless)."""
+    import urllib.parse
+
+    import httpx
+
+    query = str(args.get("query") or "").strip()
+    if not query:
+        return {"ok": False, "error": "hn.search requires a 'query' argument"}
+    limit = min(int(args.get("limit", 10)), 30)
+    url = ("https://hn.algolia.com/api/v1/search?query=" + urllib.parse.quote(query)
+           + f"&hitsPerPage={limit}")
+    try:
+        async with httpx.AsyncClient(timeout=25,
+                                     headers={"User-Agent": "agent-os/0.1"}) as client:
+            resp = await client.get(url)
+            resp.raise_for_status()
+            data = resp.json()
+        results = []
+        for h in data.get("hits", []):
+            title = h.get("title") or (h.get("story_title") or "")
+            if not title:
+                continue
+            results.append({
+                "title": title,
+                "url": h.get("url") or f"https://news.ycombinator.com/item?id={h.get('objectID')}",
+                "author": h.get("author", ""),
+                "points": h.get("points", 0),
+                "comments": h.get("num_comments", 0),
+                "created": h.get("created_at", ""),
+            })
+        return {"ok": True, "query": query, "results": results, "count": len(results)}
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "error": f"hn_search failed: {exc}"}
+
+
+async def _h_reddit_search(ctx: Any, args: dict) -> dict:
+    """Reddit search via the old.reddit JSON endpoint (keyless; browser UA)."""
+    import time
+    import urllib.parse
+
+    import httpx
+
+    query = str(args.get("query") or "").strip()
+    if not query:
+        return {"ok": False, "error": "reddit.search requires a 'query' argument"}
+    limit = min(int(args.get("limit", 10)), 30)
+    sub = str(args.get("subreddit") or "").strip()
+    base = f"https://old.reddit.com/r/{sub}/search.json" if sub else "https://old.reddit.com/search.json"
+    url = base + "?q=" + urllib.parse.quote(query) + f"&limit={limit}&sort=relevance"
+    try:
+        async with httpx.AsyncClient(timeout=25, follow_redirects=True,
+                                     headers={"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0 Safari/537.36"}) as client:
+            resp = await client.get(url)
+            resp.raise_for_status()
+            data = resp.json()
+        results = []
+        for child in data.get("data", {}).get("children", []):
+            d = child.get("data", {})
+            results.append({
+                "title": d.get("title", ""),
+                "text": (d.get("selftext") or "")[:600],
+                "url": "https://reddit.com" + d.get("permalink", ""),
+                "subreddit": d.get("subreddit", ""),
+                "score": d.get("score", 0),
+                "comments": d.get("num_comments", 0),
+                "created_utc": time.strftime("%Y-%m-%d", time.gmtime(d.get("created_utc", 0))),
+            })
+        return {"ok": True, "query": query, "results": results, "count": len(results)}
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "error": f"reddit_search failed: {exc}"}
 
 
 async def _h_web_scrape(ctx: Any, args: dict) -> dict:
@@ -894,9 +991,15 @@ BUILTIN_TOOLS: list[ToolDef] = [
     ToolDef(name="shell", description="Run a shell command inside the workspace (write commands need permission).",
             permission_key="shell", risk_level="high",
             config={"parameters": {"command": {"type": "string", "description": "Shell command"}}}),
-    ToolDef(name="web.search", description="Search the web. Returns ranked results with titles/URLs/snippets.",
+    ToolDef(name="web.search", description="Search the web via DuckDuckGo (keyless). Returns ranked results with titles/URLs/snippets.",
             permission_key="web.search", risk_level="low",
-            config={"parameters": {"query": {"type": "string", "description": "Search query"}}}),
+            config={"parameters": {"query": {"type": "string", "description": "Search query"}, "limit": {"type": "integer", "description": "max results (default 6)"}}}),
+    ToolDef(name="hn.search", description="Search Hacker News via the Algolia HN API (keyless): stories, comments, points.",
+            permission_key="web.search", risk_level="low",
+            config={"parameters": {"query": {"type": "string", "description": "Search query"}, "limit": {"type": "integer", "description": "max hits (default 10)"}}}),
+    ToolDef(name="reddit.search", description="Search Reddit (keyless, old.reddit JSON): posts, comments, scores — real community signal.",
+            permission_key="web.search", risk_level="low",
+            config={"parameters": {"query": {"type": "string", "description": "Search query"}, "subreddit": {"type": "string", "description": "optional subreddit to scope"}, "limit": {"type": "integer", "description": "max posts (default 10)"}}}),
     ToolDef(name="calculator", description="Evaluate a safe arithmetic expression.",
             permission_key="calculator", risk_level="low",
             config={"parameters": {"expression": {"type": "string", "description": "Math expression"}}}),
@@ -973,6 +1076,8 @@ HANDLERS: dict[str, ToolHandler] = {
     "filesystem.write": _h_filesystem_write,
     "shell": _h_shell,
     "web.search": _h_web_search,
+    "hn.search": _h_hn_search,
+    "reddit.search": _h_reddit_search,
     "calculator": _h_calculator,
     "memory.recall": _h_memory_recall,
     "memory.save": _h_memory_save,
